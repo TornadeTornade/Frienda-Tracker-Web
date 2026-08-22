@@ -1,7 +1,6 @@
 # 🏆 Frienda Leaderboard
 
-Interface web minimaliste et responsive permettant de consulter le classement officiel du serveur Minecraft **Frienda**. Les données sont récupérées en direct depuis la base de données Supabase du serveur.
-
+Interface web minimaliste et responsive permettant de consulter en direct le classement et les statistiques des joueurs du serveur Minecraft **Frienda**.
 ![Stack](https://img.shields.io/badge/Frontend-Vanilla_JS-yellow)
 ![Style](https://img.shields.io/badge/Styling-Tailwind_CSS-blue)
 ![Database](https://img.shields.io/badge/Database-Supabase-emerald)
