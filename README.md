@@ -26,13 +26,34 @@ Interface web minimaliste et responsive permettant de consulter en direct le cla
 * **Supabase REST API** — Récupération des données joueurs.
 * **MC-Heads API** — Rendu automatique des têtes d'avatars Minecraft.
 
+
+# 🌐 Frienda Tracker — Web Dashboard
+
+[![Frontend](https://img.shields.io/badge/Frontend-HTML5%20%2F%20TailwindCSS-blue.svg)](#)
+[![License](https://img.shields.io/badge/License-All%20Rights%20Reserved-red.svg)](LICENSE)
+
+Dashboard web interactif lié au mod Minecraft **Frienda Tracker**. Il permet de consulter les statistiques du serveur et des joueurs en temps réel.
+
 ---
 
-## 🚀 Installation & Développement local
+## ✨ Fonctionnalités
 
-Puisque le projet est conçu en Web Vanilla, aucune étape de compilation (npm/node) n'est requise.
+* 🏆 **Classements :** Tri par catégorie (temps de jeu, kills, minage, etc.).
+* ⚔️ **Comparateur :** Comparaison directe des statistiques entre joueurs.
+* 👤 **Profils :** Graphiques d'aptitudes et cartes de joueur à exporter.
+* 📊 **Statistiques globales :** Métriques de la communauté et activité du serveur.
+* 🎮 **Statut en direct :** Nombre de joueurs en ligne et IP du serveur (`frienda.exaroton.me`).
 
-1. **Cloner le dépôt :**
-   ```bash
-   git clone [https://github.com/votre-pseudo/frienda-web.git](https://github.com/votre-pseudo/frienda-web.git)
-   cd frienda-web
+---
+
+## 🛠️ Stack Technique
+
+* **Front-end :** HTML5, Tailwind CSS, Chart.js, html2canvas.
+* **Base de données :** Supabase (API REST).
+
+---
+
+## 📄 Licence
+
+Ce projet est sous licence **All Rights Reserved (Tous droits réservés)**.  
+Toute reproduction, modification ou redistribution sans autorisation préalable est strictement interdite.
