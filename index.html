@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Frienda Tracker</title>
+<meta name="description" content="Statistiques en direct des joueurs du serveur Minecraft Frienda." />
+
+<!-- Fonts : Sora (UI) + JetBrains Mono (chiffres/data) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- Tailwind (CDN, config inline) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: "#0B0F14",
+          surface: "#121821",
+          surface2: "#1A222D",
+          border: "#26313D",
+          muted: "#8B98A8",
+          ink: "#E9EEF3",
+          gold: "#F2B33D",
+          enchant: "#8B6CF2",
+          enchant2: "#6D4FE0",
+          green: "#48D982",
+          red: "#F2545B",
+          bronze: "#C97A4A",
+          silver: "#B9C2CC",
+        },
+        fontFamily: {
+          sans: ["Sora", "sans-serif"],
+          mono: ["JetBrains Mono", "monospace"],
+        },
+        boxShadow: {
+          slot: "inset 0 0 0 1px #26313D, inset 0 -3px 0 rgba(0,0,0,.35), inset 0 3px 0 rgba(255,255,255,.03)",
+          card: "0 1px 0 rgba(255,255,255,.04) inset, 0 8px 24px -12px rgba(0,0,0,.6)",
+        },
+      },
+    },
+  };
+</script>
+
+<!-- Librairies -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="bg-bg text-ink font-sans antialiased">
+
+<div class="flex min-h-screen">
+
+  <!-- ============ SIDEBAR (fixe, jamais repliée) ============ -->
+  <aside class="w-[260px] shrink-0 h-screen sticky top-0 flex flex-col bg-surface border-r border-border">
+
+    <div class="px-5 pt-6 pb-5 border-b border-border">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-md bg-surface2 shadow-slot flex items-center justify-center">
+          <span class="text-lg"><img src="frienda_tacker_logo.jpg" alt=""></span>
+        </div>
+        <div>
+          <p class="font-extrabold tracking-tight leading-none text-[15px]">FRIENDA</p>
+          <p class="text-[11px] font-mono text-muted tracking-wide">TRACKER</p>
+        </div>
+      </div>
+    </div>
+
+    <nav id="sidebar-nav" class="flex-1 overflow-y-auto py-4 px-3 space-y-1"></nav>
+
+    <!-- Encart joueurs connectés + copier IP -->
+    <div class="px-3 pb-4">
+      <div class="rounded-lg bg-surface2 shadow-slot p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[11px] font-mono uppercase tracking-wider text-muted">Serveur</span>
+          <span id="online-dot" class="w-2 h-2 rounded-full bg-green shadow-[0_0_8px_2px_rgba(72,217,130,.6)]"></span>
+        </div>
+        <div class="flex items-baseline gap-1 mb-3">
+          <span id="online-count" class="font-mono text-2xl font-bold text-ink">–</span>
+          <span class="text-xs text-muted">joueur(s) en ligne</span>
+        </div>
+        <button id="copy-ip-btn"
+          class="w-full text-left group flex items-center justify-between rounded-md bg-bg/60 hover:bg-bg border border-border px-3 py-2 transition-colors">
+          <span class="font-mono text-[12px] text-ink truncate">frienda.exaroton.me</span>
+          <span class="text-[10px] font-mono uppercase text-gold group-hover:text-white transition-colors" id="copy-ip-label">Copier</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ CONTENU ============ -->
+  <main class="flex-1 min-w-0">
+    <div id="page-root" class="max-w-[1200px] mx-auto px-6 md:px-10 py-8"></div>
+  </main>
+</div>
+
+<!-- Toast générique -->
+<div id="toast" class="fixed bottom-6 right-6 z-50 hidden">
+  <div class="bg-surface2 border border-border shadow-card rounded-md px-4 py-3 text-sm"></div>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/supabaseClient.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/sidebar.js"></script>
+<script src="js/pages/classement.js"></script>
+<script src="js/pages/comparateur.js"></script>
+<script src="js/pages/podium.js"></script>
+<script src="js/pages/profil.js"></script>
+<script src="js/pages/serverStats.js"></script>
+<script src="js/pages/liveFeed.js"></script>
+<script src="js/router.js"></script>
+</body>
+</html>
