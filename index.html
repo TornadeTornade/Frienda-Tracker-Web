@@ -6,12 +6,10 @@
 <title>Frienda Tracker</title>
 <meta name="description" content="Statistiques en direct des joueurs du serveur Minecraft Frienda." />
 
-<!-- Fonts : Sora (UI) + JetBrains Mono (chiffres/data) -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-<!-- Tailwind (CDN, config inline) -->
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   tailwind.config = {
@@ -45,7 +43,6 @@
   };
 </script>
 
-<!-- Librairies -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -54,26 +51,48 @@
 </head>
 <body class="bg-bg text-ink font-sans antialiased">
 
-<div class="flex min-h-screen">
+<header class="md:hidden flex items-center justify-between px-4 py-3 bg-surface border-b border-border sticky top-0 z-30">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 rounded-md bg-surface2 shadow-slot flex items-center justify-center overflow-hidden">
+      <img src="frienda_tacker_logo.jpg" alt="Logo" class="w-full h-full object-cover">
+    </div>
+    <div>
+      <p class="font-extrabold tracking-tight leading-none text-sm">FRIENDA</p>
+      <p class="text-[10px] font-mono text-muted tracking-wide">TRACKER</p>
+    </div>
+  </div>
+  <button id="mobile-menu-btn" aria-label="Ouvrir le menu" class="p-2 text-ink hover:bg-surface2 rounded-md border border-border">
+    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+    </svg>
+  </button>
+</header>
 
-  <!-- ============ SIDEBAR (fixe, jamais repliée) ============ -->
-  <aside class="w-[260px] shrink-0 h-screen sticky top-0 flex flex-col bg-surface border-r border-border">
+<div class="flex min-h-screen flex-col md:flex-row">
 
-    <div class="px-5 pt-6 pb-5 border-b border-border">
+  <div id="sidebar-overlay" class="fixed inset-0 bg-black/60 z-40 hidden md:hidden transition-opacity"></div>
+
+  <aside id="sidebar" class="fixed inset-y-0 left-0 z-50 w-[260px] shrink-0 h-screen flex flex-col bg-surface border-r border-border transition-transform duration-200 -translate-x-full md:translate-x-0 md:sticky md:top-0">
+
+    <div class="px-5 pt-6 pb-5 border-b border-border flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-md bg-surface2 shadow-slot flex items-center justify-center">
-          <span class="text-lg"><img src="frienda_tacker_logo.jpg" alt="" ></span>
+        <div class="w-10 h-10 rounded-md bg-surface2 shadow-slot flex items-center justify-center overflow-hidden">
+          <img src="frienda_tacker_logo.jpg" alt="Logo" class="w-full h-full object-cover">
         </div>
         <div>
           <p class="font-extrabold tracking-tight leading-none text-[15px]">FRIENDA</p>
           <p class="text-[11px] font-mono text-muted tracking-wide">TRACKER</p>
         </div>
       </div>
+      <button id="close-menu-btn" aria-label="Fermer le menu" class="md:hidden text-muted hover:text-ink p-1">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
     </div>
 
     <nav id="sidebar-nav" class="flex-1 overflow-y-auto py-4 px-3 space-y-1"></nav>
 
-    <!-- Encart joueurs connectés + copier IP -->
     <div class="px-3 pb-4">
       <div class="rounded-lg bg-surface2 shadow-slot p-3">
         <div class="flex items-center justify-between mb-2">
@@ -93,16 +112,44 @@
     </div>
   </aside>
 
-  <!-- ============ CONTENU ============ -->
   <main class="flex-1 min-w-0">
-    <div id="page-root" class="max-w-[1200px] mx-auto px-6 md:px-10 py-8"></div>
+    <div id="page-root" class="max-w-[1200px] mx-auto px-4 sm:px-6 md:px-10 py-6 md:py-8"></div>
   </main>
 </div>
 
-<!-- Toast générique -->
 <div id="toast" class="fixed bottom-6 right-6 z-50 hidden">
   <div class="bg-surface2 border border-border shadow-card rounded-md px-4 py-3 text-sm"></div>
 </div>
+
+<script>
+  const menuBtn = document.getElementById('mobile-menu-btn');
+  const closeBtn = document.getElementById('close-menu-btn');
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+
+  function openMenu() {
+    sidebar.classList.remove('-translate-x-full');
+    overlay.classList.remove('hidden');
+    document.body.classList.add('overflow-hidden', 'md:overflow-auto');
+  }
+
+  function closeMenu() {
+    sidebar.classList.add('-translate-x-full');
+    overlay.classList.add('hidden');
+    document.body.classList.remove('overflow-hidden', 'md:overflow-auto');
+  }
+
+  if (menuBtn) menuBtn.addEventListener('click', openMenu);
+  if (closeBtn) closeBtn.addEventListener('click', closeMenu);
+  if (overlay) overlay.addEventListener('click', closeMenu);
+
+  // Fermer le menu lors de la navigation
+  document.getElementById('sidebar-nav')?.addEventListener('click', (e) => {
+    if (e.target.closest('a') || e.target.closest('button')) {
+      closeMenu();
+    }
+  });
+</script>
 
 <script src="js/config.js"></script>
 <script src="js/supabaseClient.js"></script>
