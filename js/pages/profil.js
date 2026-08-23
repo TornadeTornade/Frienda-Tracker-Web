@@ -1,8 +1,12 @@
 window.PageProfil = (() => {
-  let currentPlayer = null; // ligne player_stats
+  const MAX_CARD_STATS = 3;
+
+  let currentPlayer = null;
   let allPlayers = [];
+  let allStatsCache = null;
   let chartStatKey = "playtime_seconds";
   let chartInstance = null;
+  let cardSelectedKeys = [];
 
   async function fetchAllPlayersLight() {
     const { data, error } = await window.sb.from("player_stats").select("uuid, username").order("username");
@@ -22,9 +26,11 @@ window.PageProfil = (() => {
   }
 
   async function fetchAllStats() {
+    if (allStatsCache) return allStatsCache;
     const { data, error } = await window.sb.from("player_stats").select("*");
     if (error) throw error;
-    return data ?? [];
+    allStatsCache = data ?? [];
+    return allStatsCache;
   }
 
   async function fetchHistory(uuid, statKey) {
@@ -59,17 +65,18 @@ window.PageProfil = (() => {
     return (count ?? 0) > 0;
   }
 
-  // ---------- Rangs (pour le Hall of Fame / la Player Card) ----------
+  // ---------- Rangs ----------
   function rankOf(uuid, key, allStats) {
     const sorted = [...allStats].sort((a, b) => (b[key] ?? 0) - (a[key] ?? 0));
     return sorted.findIndex((p) => p.uuid === uuid) + 1;
   }
 
-  function bestCategories(uuid, allStats, n = 3) {
+  function bestCategoryKeys(uuid, allStats, n = MAX_CARD_STATS) {
     return window.STAT_CATEGORIES
       .map((c) => ({ cat: c, rank: rankOf(uuid, c.key, allStats) }))
       .sort((a, b) => a.rank - b.rank)
-      .slice(0, n);
+      .slice(0, n)
+      .map((x) => x.cat.key);
   }
 
   // ---------- Rendu ----------
@@ -85,6 +92,13 @@ window.PageProfil = (() => {
 
   function emptyStateHTML() {
     return `<p class="text-muted text-sm">Recherche un pseudo ci-dessus pour afficher son profil complet.</p>`;
+  }
+
+  function cardStatChipsHTML() {
+    return window.STAT_CATEGORIES.map((c) => {
+      const active = cardSelectedKeys.includes(c.key);
+      return `<button data-cardkey="${c.key}" class="chip-btn ${active ? "active" : ""}">${c.icon} ${c.short}</button>`;
+    }).join("");
   }
 
   async function profileHTML(p) {
@@ -103,9 +117,6 @@ window.PageProfil = (() => {
         <div class="flex-1 min-w-0 text-center sm:text-left">
           <h2 class="text-xl font-extrabold">${p.username}</h2>
           <p class="text-muted text-xs font-mono mt-1">${p.uuid}</p>
-          <button id="gen-card-btn" class="chip-btn active mt-4 !bg-gradient-to-b !from-enchant !to-enchant2">
-            🃏 Générer la Player Card
-          </button>
         </div>
       </div>
 
@@ -131,9 +142,23 @@ window.PageProfil = (() => {
         </div>
       </section>
 
-      <section>
+      <section class="mb-8">
         <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕑 Historique de connexions</p>
         <div id="sessions-list" class="card divide-y divide-border">${window.skeletonRows(4, "h-12")}</div>
+      </section>
+
+      <section>
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🃏 Player Card</p>
+        <div class="card p-5">
+          <p class="text-sm text-muted mb-3">
+            Choisis jusqu'à ${MAX_CARD_STATS} statistiques à afficher sur la carte
+            (<span class="text-ink font-medium" id="card-count">0</span>/${MAX_CARD_STATS} sélectionnée(s)).
+          </p>
+          <div class="flex flex-wrap gap-2 mb-4" id="card-stat-nav">${cardStatChipsHTML()}</div>
+          <button id="gen-card-btn" class="chip-btn active !bg-gradient-to-b !from-enchant !to-enchant2">
+            ⬇️ Télécharger la Player Card
+          </button>
+        </div>
       </section>
     `;
   }
@@ -196,7 +221,7 @@ window.PageProfil = (() => {
   }
 
   // ---------- Player Card (export image) ----------
-  function buildPlayerCardNode(p, best3, globalRank) {
+  function buildPlayerCardNode(p, selectedKeys, globalRank) {
     const node = window.el("div", { id: "player-card-export" });
     node.innerHTML = `
       <div style="position:absolute;inset:0;background:linear-gradient(160deg,#1A1030,#0B0F14 55%,#0B0F14);"></div>
@@ -208,15 +233,16 @@ window.PageProfil = (() => {
         <div style="font-weight:800;font-size:20px;margin-top:8px;">${p.username}</div>
         <div style="width:100%;height:1px;background:rgba(255,255,255,.12);margin:14px 0;"></div>
         <div style="display:flex;width:100%;justify-content:space-between;gap:8px;">
-          ${best3
-            .map(
-              (b) => `
+          ${selectedKeys
+            .map((key) => {
+              const cat = window.statByKey(key);
+              return `
             <div style="flex:1;text-align:center;">
-              <div style="font-size:20px;">${b.cat.icon}</div>
-              <div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;color:#F2B33D;margin-top:2px;">${window.fmt.statValue(b.cat.key, p[b.cat.key])}</div>
-              <div style="font-size:9px;color:#8B98A8;text-transform:uppercase;letter-spacing:.05em;margin-top:2px;">${b.cat.short}</div>
-            </div>`
-            )
+              <div style="font-size:20px;">${cat.icon}</div>
+              <div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;color:#F2B33D;margin-top:2px;">${window.fmt.statValue(cat.key, p[cat.key])}</div>
+              <div style="font-size:9px;color:#8B98A8;text-transform:uppercase;letter-spacing:.05em;margin-top:2px;">${cat.short}</div>
+            </div>`;
+            })
             .join("")}
         </div>
       </div>
@@ -225,18 +251,20 @@ window.PageProfil = (() => {
   }
 
   async function generatePlayerCard(p) {
+    if (!cardSelectedKeys.length) {
+      window.showToast("Choisis au moins une statistique pour la carte", "error");
+      return;
+    }
     window.showToast("Génération de la carte…");
     try {
       const allStats = await fetchAllStats();
-      const best3 = bestCategories(p.uuid, allStats, 3);
       const globalRank = rankOf(p.uuid, "playtime_seconds", allStats);
 
-      const node = buildPlayerCardNode(p, best3, globalRank);
+      const node = buildPlayerCardNode(p, cardSelectedKeys, globalRank);
       node.style.position = "fixed";
       node.style.left = "-9999px";
       document.body.appendChild(node);
 
-      // laisser le temps à l'image du skin de charger
       await new Promise((r) => setTimeout(r, 400));
 
       const canvas = await html2canvas(node, { backgroundColor: null, scale: 2, useCORS: true });
@@ -268,6 +296,11 @@ window.PageProfil = (() => {
       .join("");
   }
 
+  function updateCardCountLabel() {
+    const label = document.getElementById("card-count");
+    if (label) label.textContent = String(cardSelectedKeys.length);
+  }
+
   async function loadProfile(username) {
     const wrap = document.getElementById("profil-content");
     wrap.innerHTML = window.skeletonRows(3, "h-16");
@@ -278,7 +311,13 @@ window.PageProfil = (() => {
         return;
       }
       currentPlayer = p;
+
+      // sélection par défaut de la Player Card = les 3 meilleures catégories du joueur
+      const allStats = await fetchAllStats();
+      cardSelectedKeys = bestCategoryKeys(p.uuid, allStats, MAX_CARD_STATS);
+
       wrap.innerHTML = await profileHTML(p);
+      updateCardCountLabel();
 
       document.getElementById("chart-cat-nav").addEventListener("click", (e) => {
         const btn = e.target.closest("button[data-key]");
@@ -286,6 +325,24 @@ window.PageProfil = (() => {
         chartStatKey = btn.dataset.key;
         window.$$("#chart-cat-nav .chip-btn").forEach((b) => b.classList.toggle("active", b === btn));
         renderChart(p.uuid);
+      });
+
+      document.getElementById("card-stat-nav").addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-cardkey]");
+        if (!btn) return;
+        const key = btn.dataset.cardkey;
+        if (cardSelectedKeys.includes(key)) {
+          cardSelectedKeys = cardSelectedKeys.filter((k) => k !== key);
+          btn.classList.remove("active");
+        } else {
+          if (cardSelectedKeys.length >= MAX_CARD_STATS) {
+            window.showToast(`Maximum ${MAX_CARD_STATS} statistiques sur la carte`, "error");
+            return;
+          }
+          cardSelectedKeys.push(key);
+          btn.classList.add("active");
+        }
+        updateCardCountLabel();
       });
 
       document.getElementById("gen-card-btn").addEventListener("click", () => generatePlayerCard(p));
@@ -337,6 +394,7 @@ window.PageProfil = (() => {
   }
 
   async function render() {
+    allStatsCache = null;
     renderAll();
     bindEvents();
     try {
