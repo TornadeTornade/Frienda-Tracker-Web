@@ -6,7 +6,9 @@ window.PageProfil = (() => {
   let allStatsCache = null;
   let chartStatKey = "playtime_seconds";
   let chartInstance = null;
+  let radarInstance = null;
   let cardSelectedKeys = [];
+  const RADAR_KEYS = ["playtime_seconds", "player_kills", "mob_kills", "blocks_broken", "distance_meters", "jumps"];
 
   async function fetchAllPlayersLight() {
     const { data, error } = await window.sb.from("player_stats").select("uuid, username").order("username");
@@ -79,6 +81,20 @@ window.PageProfil = (() => {
       .map((x) => x.cat.key);
   }
 
+  function radarVsAverage(uuid, allStats) {
+    const playerData = [];
+    const avgData = [];
+    RADAR_KEYS.forEach((key) => {
+      const values = allStats.map((p) => p[key] ?? 0);
+      const max = Math.max(1, ...values);
+      const player = allStats.find((p) => p.uuid === uuid);
+      const avg = values.reduce((a, b) => a + b, 0) / (values.length || 1);
+      playerData.push(Math.round(((player ? player[key] ?? 0 : 0) / max) * 100));
+      avgData.push(Math.round((avg / max) * 100));
+    });
+    return { labels: RADAR_KEYS.map((k) => window.statByKey(k).short), playerData, avgData };
+  }
+
   // ---------- Rendu ----------
   function searchBarHTML() {
     return `
@@ -101,7 +117,23 @@ window.PageProfil = (() => {
     }).join("");
   }
 
-  async function profileHTML(p) {
+  function rankBarsHTML(uuid, allStats) {
+    const n = allStats.length || 1;
+    return window.STAT_CATEGORIES.map((c) => {
+      const rank = rankOf(uuid, c.key, allStats);
+      const percentile = Math.round(((n - rank + 1) / n) * 100);
+      return `
+        <div class="flex items-center gap-3 py-2">
+          <span class="w-[120px] shrink-0 text-xs text-muted font-mono truncate">${c.icon} ${c.short}</span>
+          <div class="flex-1 h-2 rounded-full bg-bg overflow-hidden shadow-slot">
+            <div class="h-full rounded-full bg-gradient-to-r from-enchant to-gold" style="width:${percentile}%"></div>
+          </div>
+          <span class="w-16 shrink-0 text-right text-xs font-mono text-ink">#${rank}<span class="text-muted">/${n}</span></span>
+        </div>`;
+    }).join("");
+  }
+
+  async function profileHTML(p, allStats) {
     const online = await isOnline(p.uuid);
     return `
       <div class="card p-6 flex flex-col sm:flex-row items-center sm:items-start gap-6 mb-6">
@@ -129,6 +161,16 @@ window.PageProfil = (() => {
           </div>`
         ).join("")}
       </div>
+
+      <section class="mb-8">
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">📊 Classement du joueur</p>
+        <div class="card p-5 divide-y divide-border/60">${rankBarsHTML(p.uuid, allStats)}</div>
+      </section>
+
+      <section class="mb-8">
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕸️ Profil vs moyenne du serveur</p>
+        <div class="card p-4" style="height:300px"><canvas id="profil-radar"></canvas></div>
+      </section>
 
       <section class="mb-8">
         <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">📈 Évolution</p>
@@ -215,6 +257,36 @@ window.PageProfil = (() => {
         scales: {
           x: { ticks: { color: "#8B98A8" }, grid: { color: "#1A222D" } },
           y: { ticks: { color: "#8B98A8" }, grid: { color: "#1A222D" } },
+        },
+      },
+    });
+  }
+
+  function renderProfileRadar(uuid, allStats) {
+    const canvas = document.getElementById("profil-radar");
+    if (!canvas) return;
+    if (radarInstance) radarInstance.destroy();
+    const { labels, playerData, avgData } = radarVsAverage(uuid, allStats);
+    radarInstance = new Chart(canvas.getContext("2d"), {
+      type: "radar",
+      data: {
+        labels,
+        datasets: [
+          { label: "Moyenne du serveur", data: avgData, borderColor: "#8B98A8", backgroundColor: "rgba(139,152,168,.12)", pointRadius: 2 },
+          { label: "Ce joueur", data: playerData, borderColor: "#F2B33D", backgroundColor: "rgba(242,179,61,.25)", pointRadius: 2 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: "bottom", labels: { color: "#8B98A8", font: { size: 11 } } } },
+        scales: {
+          r: {
+            angleLines: { color: "#1A222D" },
+            grid: { color: "#1A222D" },
+            pointLabels: { color: "#8B98A8", font: { size: 10, family: "JetBrains Mono" } },
+            ticks: { display: false, backdropColor: "transparent" },
+            suggestedMin: 0, suggestedMax: 100,
+          },
         },
       },
     });
@@ -316,8 +388,9 @@ window.PageProfil = (() => {
       const allStats = await fetchAllStats();
       cardSelectedKeys = bestCategoryKeys(p.uuid, allStats, MAX_CARD_STATS);
 
-      wrap.innerHTML = await profileHTML(p);
+      wrap.innerHTML = await profileHTML(p, allStats);
       updateCardCountLabel();
+      renderProfileRadar(p.uuid, allStats);
 
       document.getElementById("chart-cat-nav").addEventListener("click", (e) => {
         const btn = e.target.closest("button[data-key]");
@@ -402,7 +475,10 @@ window.PageProfil = (() => {
     } catch (e) {
       console.error(e);
     }
-    return () => { if (chartInstance) { chartInstance.destroy(); chartInstance = null; } };
+    return () => {
+      if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+      if (radarInstance) { radarInstance.destroy(); radarInstance = null; }
+    };
   }
 
   return { render };

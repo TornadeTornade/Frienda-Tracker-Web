@@ -4,6 +4,10 @@ window.PageComparateur = (() => {
 
   let allPlayers = []; // {uuid, username}
   let selected = []; // uuid[]
+  let globalMax = null; // { [statKey]: maxValue } sur l'ensemble des joueurs
+  let radarInstance = null;
+
+  const RADAR_COLORS = ["#8B6CF2", "#F2B33D", "#48D982", "#F2545B"];
 
   async function fetchAllPlayersLight() {
     const { data, error } = await window.sb.from("player_stats").select("uuid, username").order("username");
@@ -17,6 +21,17 @@ window.PageComparateur = (() => {
     if (error) throw error;
     // conserver l'ordre de sélection
     return uuids.map((u) => data.find((d) => d.uuid === u)).filter(Boolean);
+  }
+
+  async function fetchGlobalMax() {
+    if (globalMax) return globalMax;
+    const { data, error } = await window.sb.from("player_stats").select("*");
+    if (error) throw error;
+    globalMax = {};
+    window.STAT_CATEGORIES.forEach((c) => {
+      globalMax[c.key] = Math.max(1, ...(data ?? []).map((p) => p[c.key] ?? 0));
+    });
+    return globalMax;
   }
 
   function chipsHTML() {
@@ -99,12 +114,50 @@ window.PageComparateur = (() => {
       <p class="text-xs text-muted mt-3">🟢 = meilleure valeur du groupe sur cette statistique.</p>`;
   }
 
+  async function renderRadar(stats) {
+    const canvas = document.getElementById("compare-radar");
+    if (!canvas) return;
+    if (radarInstance) { radarInstance.destroy(); radarInstance = null; }
+    if (stats.length < 2) return;
+
+    const max = await fetchGlobalMax();
+    radarInstance = new Chart(canvas.getContext("2d"), {
+      type: "radar",
+      data: {
+        labels: window.STAT_CATEGORIES.map((c) => c.short),
+        datasets: stats.map((s, i) => ({
+          label: s.username,
+          data: window.STAT_CATEGORIES.map((c) => Math.round(((s[c.key] ?? 0) / max[c.key]) * 100)),
+          borderColor: RADAR_COLORS[i],
+          backgroundColor: RADAR_COLORS[i] + "33",
+          pointRadius: 2,
+        })),
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: "bottom", labels: { color: "#8B98A8", font: { size: 11 } } } },
+        scales: {
+          r: {
+            angleLines: { color: "#1A222D" },
+            grid: { color: "#1A222D" },
+            pointLabels: { color: "#8B98A8", font: { size: 9, family: "JetBrains Mono" } },
+            ticks: { display: false, backdropColor: "transparent" },
+            suggestedMin: 0, suggestedMax: 100,
+          },
+        },
+      },
+    });
+  }
+
   async function refreshTable() {
     const wrap = document.getElementById("compare-table-wrap");
     wrap.innerHTML = window.skeletonRows(4, "h-10");
     try {
       const stats = await fetchStatsFor(selected);
       wrap.innerHTML = tableHTML(stats);
+      const radarSection = document.getElementById("compare-radar-section");
+      radarSection.style.display = stats.length >= 2 ? "" : "none";
+      if (stats.length >= 2) await renderRadar(stats);
     } catch (e) {
       console.error(e);
       wrap.innerHTML = `<p class="text-red text-sm mt-4">Erreur lors du chargement des statistiques.</p>`;
@@ -129,6 +182,12 @@ window.PageComparateur = (() => {
       </div>
 
       <div id="compare-table-wrap"></div>
+
+      <section class="mt-8" id="compare-radar-section" style="display:none">
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕸️ Profils comparés (toile)</p>
+        <div class="card p-4" style="height:340px"><canvas id="compare-radar"></canvas></div>
+        <p class="text-xs text-muted mt-2">Chaque axe est normalisé par rapport au record du serveur sur cette statistique (100% = meilleur joueur du serveur).</p>
+      </section>
     `;
   }
 
@@ -169,6 +228,7 @@ window.PageComparateur = (() => {
   }
 
   async function render() {
+    globalMax = null;
     renderAll();
     bindEvents();
     document.getElementById("compare-table-wrap").innerHTML = tableHTML([]);
@@ -178,6 +238,7 @@ window.PageComparateur = (() => {
       console.error(e);
       window.showToast("Impossible de charger la liste des joueurs", "error");
     }
+    return () => { if (radarInstance) { radarInstance.destroy(); radarInstance = null; } };
   }
 
   return { render };

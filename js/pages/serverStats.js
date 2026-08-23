@@ -40,6 +40,14 @@ window.PageServerStats = (() => {
     return data ?? [];
   }
 
+  async function fetchFirstSeen(sinceIso) {
+    let q = window.sb.from("player_stats").select("uuid, username, first_seen").order("first_seen");
+    if (sinceIso) q = q.gte("first_seen", sinceIso);
+    const { data, error } = await q;
+    if (error) throw error;
+    return data ?? [];
+  }
+
   async function fetchSessions(sinceIso) {
     let q = window.sb
       .from("player_sessions")
@@ -203,6 +211,58 @@ window.PageServerStats = (() => {
       topData.push(100);
     });
     return { labels: RADAR_KEYS.map((k) => window.statByKey(k).short), avgData, topData };
+  }
+
+  const DURATION_BUCKETS = [
+    { max: 900, label: "< 15 min" },
+    { max: 1800, label: "15-30 min" },
+    { max: 3600, label: "30-60 min" },
+    { max: 7200, label: "1-2 h" },
+    { max: Infinity, label: "2 h +" },
+  ];
+
+  function sessionDurationHistogram(sessions) {
+    const counts = DURATION_BUCKETS.map(() => 0);
+    sessions.forEach((s) => {
+      if (s.session_seconds == null) return;
+      const idx = DURATION_BUCKETS.findIndex((b) => s.session_seconds < b.max);
+      counts[idx === -1 ? DURATION_BUCKETS.length - 1 : idx]++;
+    });
+    return counts;
+  }
+
+  function newPlayersPerBucket(firstSeenRows, sinceIso) {
+    // regroupe par jour si période courte (semaine/mois), par mois pour année/total
+    const groupByMonth = !sinceIso || (new Date() - new Date(sinceIso)) / 86400000 > 60;
+    const byBucket = {};
+    firstSeenRows.forEach((r) => {
+      const d = new Date(r.first_seen);
+      const key = groupByMonth
+        ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+        : d.toISOString().slice(0, 10);
+      byBucket[key] = (byBucket[key] || 0) + 1;
+    });
+    const labels = Object.keys(byBucket).sort();
+    return {
+      labels: labels.map((l) =>
+        groupByMonth
+          ? new Date(l + "-01").toLocaleDateString("fr-FR", { month: "short", year: "2-digit" })
+          : new Date(l).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })
+      ),
+      values: labels.map((l) => byBucket[l]),
+    };
+  }
+
+  function kdData(players) {
+    const totalKills = players.reduce((s, p) => s + (p.player_kills ?? 0), 0);
+    const totalDeaths = players.reduce((s, p) => s + (p.deaths ?? 0), 0);
+    const globalRatio = totalDeaths ? totalKills / totalDeaths : totalKills;
+    const top = players
+      .filter((p) => p.deaths >= 1 || p.player_kills >= 1)
+      .map((p) => ({ username: p.username, ratio: p.deaths ? p.player_kills / p.deaths : p.player_kills }))
+      .sort((a, b) => b.ratio - a.ratio)
+      .slice(0, 6);
+    return { globalRatio, top };
   }
 
   // ---------------------------------------------------------------
@@ -370,6 +430,69 @@ window.PageServerStats = (() => {
     });
   }
 
+  function buildSessionHistogram(sessions) {
+    const canvas = document.getElementById("chart-session-hist");
+    if (!canvas) return;
+    const counts = sessionDurationHistogram(sessions);
+    if (counts.every((c) => c === 0)) {
+      canvas.parentElement.innerHTML = `<p class="text-sm text-muted py-6 text-center">Pas encore de sessions terminées sur cette période.</p>`;
+      return;
+    }
+    charts.sessionHist = new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: DURATION_BUCKETS.map((b) => b.label),
+        datasets: [{ data: counts, backgroundColor: CHART_COLORS.green, borderRadius: 4 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: axisOpts, y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } } },
+      },
+    });
+  }
+
+  function buildNewPlayersChart(firstSeenRows, sinceIso) {
+    const canvas = document.getElementById("chart-new-players");
+    if (!canvas) return;
+    const { labels, values } = newPlayersPerBucket(firstSeenRows, sinceIso);
+    if (labels.length < 1) {
+      canvas.parentElement.innerHTML = `<p class="text-sm text-muted py-6 text-center">Aucun nouveau joueur sur cette période.</p>`;
+      return;
+    }
+    charts.newPlayers = new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: { labels, datasets: [{ data: values, backgroundColor: CHART_COLORS.silver, borderRadius: 4 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: axisOpts, y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } } },
+      },
+    });
+  }
+
+  function buildKdChart(players) {
+    const canvas = document.getElementById("chart-kd");
+    if (!canvas) return;
+    const { top } = kdData(players);
+    if (!top.length) {
+      canvas.parentElement.innerHTML = `<p class="text-sm text-muted py-6 text-center">Pas assez de données pour un classement K/D.</p>`;
+      return;
+    }
+    charts.kd = new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: top.map((t) => t.username),
+        datasets: [{ data: top.map((t) => Math.round(t.ratio * 100) / 100), backgroundColor: CHART_COLORS.red, borderRadius: 4 }],
+      },
+      options: {
+        indexAxis: "y", responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: axisOpts, y: axisOpts },
+      },
+    });
+  }
+
   // ---------------------------------------------------------------
   // Chargement + rendu
   // ---------------------------------------------------------------
@@ -380,10 +503,11 @@ window.PageServerStats = (() => {
 
     try {
       const sinceIso = periodStartDate(activePeriod);
-      const [players, sessions, history] = await Promise.all([
+      const [players, sessions, history, firstSeenRows] = await Promise.all([
         fetchPlayers(),
         fetchSessions(sinceIso),
         fetchHistorySince(sinceIso),
+        fetchFirstSeen(sinceIso),
       ]);
 
       const totalPlayers = players.length;
@@ -425,6 +549,25 @@ window.PageServerStats = (() => {
         </section>
 
         <section class="mb-8">
+          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🧑‍🤝‍🧑 Joueurs</p>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            ${chartCard("chart-new-players", "Nouveaux joueurs sur la période", 240)}
+            ${chartCard("chart-session-hist", "Répartition des durées de session", 240)}
+          </div>
+        </section>
+
+        <section class="mb-8">
+          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">⚔️ Ratio Kills / Morts</p>
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div class="card p-5 flex flex-col justify-center">
+              <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-2">Ratio K/D global du serveur</p>
+              <p class="font-mono font-extrabold text-3xl text-red">${(kdData(players).globalRatio).toLocaleString("fr-FR", { maximumFractionDigits: 2 })}</p>
+            </div>
+            <div class="lg:col-span-2">${chartCard("chart-kd", "Top 6 meilleurs ratios K/D individuels", 240)}</div>
+          </div>
+        </section>
+
+        <section class="mb-8">
           <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🧮 Totaux cumulés (toutes périodes)</p>
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             ${chartCard("chart-totals-counters", "Compteurs (kills, morts, sauts…)", 260)}
@@ -448,6 +591,9 @@ window.PageServerStats = (() => {
 
       buildCommunityAreaChart(history);
       buildComboChart(sessions);
+      buildNewPlayersChart(firstSeenRows, sinceIso);
+      buildSessionHistogram(sessions);
+      buildKdChart(players);
       buildTotalsBarCharts(players);
       buildDoughnuts(players);
       buildRadar(players);
