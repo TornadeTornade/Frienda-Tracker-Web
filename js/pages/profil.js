@@ -5,10 +5,58 @@ window.PageProfil = (() => {
   let allPlayers = [];
   let allStatsCache = null;
   let chartStatKey = "playtime_seconds";
+  let chartPeriod = "month"; // "week" | "month" | "year" | "all"
+  const CHART_PERIODS = [
+    { key: "week", label: "Semaine" },
+    { key: "month", label: "Mois" },
+    { key: "year", label: "Année" },
+    { key: "all", label: "Tout" },
+  ];
   let chartInstance = null;
   let radarInstance = null;
+  let radarMode = "avg"; // "avg" | "record"
+  let skinViewer3D = null;
   let cardSelectedKeys = [];
   const RADAR_KEYS = ["playtime_seconds", "player_kills", "mob_kills", "blocks_broken", "distance_meters", "jumps"];
+
+  // ---------- Favoris (localStorage) ----------
+  const FAVORITES_KEY = "frienda_tracker_favorite_players";
+  function getFavorites() {
+    try {
+      return JSON.parse(localStorage.getItem(FAVORITES_KEY) || "[]");
+    } catch {
+      return [];
+    }
+  }
+  function setFavorites(list) {
+    try {
+      localStorage.setItem(FAVORITES_KEY, JSON.stringify(list));
+    } catch {
+      /* localStorage indisponible, tant pis */
+    }
+  }
+  function isFavorite(username) {
+    return getFavorites().some((u) => u.toLowerCase() === username.toLowerCase());
+  }
+  function toggleFavorite(username) {
+    const favs = getFavorites();
+    const idx = favs.findIndex((u) => u.toLowerCase() === username.toLowerCase());
+    if (idx >= 0) favs.splice(idx, 1);
+    else favs.unshift(username);
+    setFavorites(favs.slice(0, 20));
+  }
+
+  // ---------- Lien partageable ----------
+  function getUsernameFromHash() {
+    const hash = location.hash || "";
+    const qIndex = hash.indexOf("?");
+    if (qIndex === -1) return null;
+    const params = new URLSearchParams(hash.slice(qIndex + 1));
+    return params.get("p");
+  }
+  function profileShareUrl(username) {
+    return `${location.origin}${location.pathname}#profil?p=${encodeURIComponent(username)}`;
+  }
 
   async function fetchAllPlayersLight() {
     const { data, error } = await window.sb.from("player_stats").select("uuid, username").order("username");
@@ -57,6 +105,25 @@ window.PageProfil = (() => {
     return data ?? [];
   }
 
+  async function fetchSessionsCount(uuid) {
+    const { count, error } = await window.sb
+      .from("player_sessions")
+      .select("*", { count: "exact", head: true })
+      .eq("uuid", uuid);
+    if (error) return null;
+    return count ?? 0;
+  }
+
+  function summarizeSessions(sessions) {
+    const completed = sessions.filter((s) => s.left_at);
+    if (!completed.length) return { avgSeconds: 0, longestSeconds: 0 };
+    const durations = completed.map((s) => (new Date(s.left_at) - new Date(s.joined_at)) / 1000);
+    return {
+      avgSeconds: durations.reduce((a, b) => a + b, 0) / durations.length,
+      longestSeconds: Math.max(...durations),
+    };
+  }
+
   async function isOnline(uuid) {
     const { count, error } = await window.sb
       .from("player_sessions")
@@ -81,18 +148,59 @@ window.PageProfil = (() => {
       .map((x) => x.cat.key);
   }
 
-  function radarVsAverage(uuid, allStats) {
-    const playerData = [];
-    const avgData = [];
+  function filterHistoryByPeriod(history, period) {
+    if (period === "all") return history;
+    const days = { week: 7, month: 30, year: 365 }[period] ?? 30;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    return history.filter((h) => new Date(h.recorded_at).getTime() >= cutoff);
+  }
+
+  function periodChipsHTML() {
+    return CHART_PERIODS.map(
+      (per) => `<button data-period="${per.key}" class="chip-btn ${per.key === chartPeriod ? "active" : ""}">${per.label}</button>`
+    ).join("");
+  }
+
+  function computeRadarData(uuid, allStats, mode) {
+    const player = allStats.find((p) => p.uuid === uuid);
+    const chartLabels = [];
+    const chartPlayerData = [];
+    const chartCompareData = [];
+    const rows = [];
+
     RADAR_KEYS.forEach((key) => {
+      const cat = window.statByKey(key);
       const values = allStats.map((p) => p[key] ?? 0);
       const max = Math.max(1, ...values);
-      const player = allStats.find((p) => p.uuid === uuid);
       const avg = values.reduce((a, b) => a + b, 0) / (values.length || 1);
-      playerData.push(Math.round(((player ? player[key] ?? 0 : 0) / max) * 100));
-      avgData.push(Math.round((avg / max) * 100));
+      const playerValue = player ? player[key] ?? 0 : 0;
+      const compareValue = mode === "record" ? max : avg;
+
+      chartLabels.push(cat.short);
+      chartPlayerData.push(Math.round((playerValue / max) * 100));
+      chartCompareData.push(Math.round((compareValue / max) * 100));
+
+      let deltaText, deltaClass;
+      if (mode === "record") {
+        const pct = max > 0 ? Math.round((playerValue / max) * 100) : 0;
+        if (max > 0 && playerValue >= max) {
+          deltaText = "🏆 Record";
+          deltaClass = "bg-gold/10 border-gold/40 text-gold";
+        } else {
+          deltaText = `${pct}% du record`;
+          deltaClass = "bg-surface2 border-border text-muted";
+        }
+      } else {
+        const diffPct = avg > 0 ? Math.round(((playerValue - avg) / avg) * 100) : playerValue > 0 ? 100 : 0;
+        const sign = diffPct >= 0 ? "+" : "";
+        deltaText = `${sign}${diffPct}% vs moy.`;
+        deltaClass = diffPct >= 0 ? "bg-green/10 border-green/40 text-green" : "bg-red/10 border-red/40 text-red";
+      }
+
+      rows.push({ cat, playerValue, compareValue, deltaText, deltaClass });
     });
-    return { labels: RADAR_KEYS.map((k) => window.statByKey(k).short), playerData, avgData };
+
+    return { chartLabels, chartPlayerData, chartCompareData, rows };
   }
 
   // ---------- Rendu ----------
@@ -117,38 +225,89 @@ window.PageProfil = (() => {
     }).join("");
   }
 
-  function rankBarsHTML(uuid, allStats) {
+  function radarBreakdownHTML(rows, mode) {
+    const refLabel = mode === "record" ? "Record" : "Moyenne";
+    return rows
+      .map(
+        ({ cat, playerValue, compareValue, deltaText, deltaClass }) => `
+        <div class="flex items-center gap-3 px-4 py-3">
+          <span class="w-9 h-9 rounded-md bg-bg shadow-slot flex items-center justify-center text-base shrink-0">${cat.icon}</span>
+          <div class="min-w-0 flex-1">
+            <p class="text-[11px] text-muted truncate">${cat.label}</p>
+            <p class="font-mono font-bold text-sm text-ink">${window.fmt.statValue(cat.key, playerValue)}</p>
+          </div>
+          <div class="text-right shrink-0 hidden sm:block">
+            <p class="text-[10px] font-mono text-muted uppercase">${refLabel}</p>
+            <p class="font-mono text-xs text-muted">${window.fmt.statValue(cat.key, compareValue)}</p>
+          </div>
+          <span class="shrink-0 text-[11px] font-mono font-bold px-2 py-1 rounded-full border whitespace-nowrap ${deltaClass}">${deltaText}</span>
+        </div>`
+      )
+      .join("");
+  }
+
+  // Classement du joueur, restylé comme la grille de stats (card 2)
+  function rankGridHTML(uuid, allStats) {
     const n = allStats.length || 1;
     return window.STAT_CATEGORIES.map((c) => {
       const rank = rankOf(uuid, c.key, allStats);
-      const percentile = Math.round(((n - rank + 1) / n) * 100);
       return `
-        <div class="flex items-center gap-3 py-2">
-          <span class="w-[120px] shrink-0 text-xs text-muted font-mono truncate">${c.icon} ${c.short}</span>
-          <div class="flex-1 h-2 rounded-full bg-bg overflow-hidden shadow-slot">
-            <div class="h-full rounded-full bg-gradient-to-r from-enchant to-gold" style="width:${percentile}%"></div>
-          </div>
-          <span class="w-16 shrink-0 text-right text-xs font-mono text-ink">#${rank}<span class="text-muted">/${n}</span></span>
+        <div class="card p-3">
+          <p class="text-[10px] font-mono uppercase text-muted truncate">${c.icon} ${c.short}</p>
+          <p class="font-mono font-bold text-lg">#${rank}<span class="text-muted text-xs font-normal">/${n}</span></p>
         </div>`;
     }).join("");
   }
 
-  async function profileHTML(p, allStats) {
+  async function profileHTML(p, allStats, sessions, sessionsCount) {
     const online = await isOnline(p.uuid);
+    const fav = isFavorite(p.username);
+    const memberSince = p.first_seen
+      ? new Date(p.first_seen).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" })
+      : "N/A";
+    const lastSeenBadge =
+      !online && sessions.length
+        ? `<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border text-muted">
+            🕓 Dernière connexion : ${window.fmt.timeAgo(sessions[0].joined_at)}
+          </span>`
+        : "";
+    const { avgSeconds, longestSeconds } = summarizeSessions(sessions);
+    const summaryNote =
+      sessionsCount != null && sessionsCount > sessions.length
+        ? `<p class="text-[11px] text-muted mb-3">Moyenne et record calculés sur les ${sessions.length} dernières sessions (${sessionsCount} au total).</p>`
+        : "";
     return `
-      <div class="card p-6 flex flex-col sm:flex-row items-center sm:items-start gap-6 mb-6">
-        <div class="relative shrink-0">
-          <img src="${window.avatarBody3D(p.uuid, 140)}" class="h-[160px] drop-shadow-[0_8px_16px_rgba(0,0,0,.5)]" alt="" />
-          <span class="absolute -bottom-1 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border ${
-            online ? "bg-green/10 border-green/40 text-green" : "bg-surface2 border-border text-muted"
-          }">
-            <span class="w-1.5 h-1.5 rounded-full ${online ? "bg-green live-dot" : "bg-muted"}"></span>
-            ${online ? "En ligne" : "Hors ligne"}
-          </span>
+      <div class="card p-6 flex flex-col sm:flex-row items-center gap-6 mb-6">
+        <div class="flex-1 min-w-0 w-full flex flex-col sm:flex-row items-center sm:items-start gap-4 text-center sm:text-left">
+          <img src="${window.avatarHead(p.uuid, 64)}" class="w-16 h-16 rounded-md shadow-slot shrink-0" alt="" />
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 justify-center sm:justify-start">
+              <h2 class="text-xl font-extrabold truncate">${p.username}</h2>
+              <button id="fav-toggle-btn" class="shrink-0 text-lg leading-none transition-colors ${
+                fav ? "text-gold" : "text-muted hover:text-gold"
+              }" title="${fav ? "Retirer des favoris" : "Ajouter aux favoris"}">${fav ? "★" : "☆"}</button>
+              <button id="share-profile-btn" class="shrink-0 text-muted hover:text-ink transition-colors text-sm" title="Copier le lien du profil">🔗</button>
+            </div>
+            <p class="text-muted text-xs font-mono mt-1 truncate">${p.uuid}</p>
+            <div class="flex items-center gap-2 mt-3 justify-center sm:justify-start flex-wrap">
+              <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border ${
+                online ? "bg-green/10 border-green/40 text-green" : "bg-surface2 border-border text-muted"
+              }">
+                <span class="w-1.5 h-1.5 rounded-full ${online ? "bg-green live-dot" : "bg-muted"}"></span>
+                ${online ? "En ligne" : "Hors ligne"}
+              </span>
+              <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border text-muted">
+                ⭐ Niveau XP : N/A
+              </span>
+              <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border text-muted">
+                🗓️ Membre depuis : ${memberSince}
+              </span>
+              ${lastSeenBadge}
+            </div>
+          </div>
         </div>
-        <div class="flex-1 min-w-0 text-center sm:text-left">
-          <h2 class="text-xl font-extrabold">${p.username}</h2>
-          <p class="text-muted text-xs font-mono mt-1">${p.uuid}</p>
+        <div class="shrink-0 w-full sm:w-[220px] h-[280px] rounded-lg bg-bg shadow-slot overflow-hidden cursor-grab active:cursor-grabbing">
+          <canvas id="profil-skin-3d" width="220" height="280" class="w-full h-full"></canvas>
         </div>
       </div>
 
@@ -163,44 +322,96 @@ window.PageProfil = (() => {
       </div>
 
       <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">📊 Classement du joueur</p>
-        <div class="card p-5 divide-y divide-border/60">${rankBarsHTML(p.uuid, allStats)}</div>
-      </section>
-
-      <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕸️ Profil vs moyenne du serveur</p>
-        <div class="card p-4" style="height:300px"><canvas id="profil-radar"></canvas></div>
-      </section>
-
-      <section class="mb-8">
         <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">📈 Évolution</p>
-        <div class="flex flex-wrap gap-2 mb-4" id="chart-cat-nav">
-          ${window.STAT_CATEGORIES.map(
-            (c) => `<button data-key="${c.key}" class="chip-btn ${c.key === chartStatKey ? "active" : ""}">${c.icon} ${c.short}</button>`
-          ).join("")}
+
+        <div class="card p-4 mb-4">
+          <div class="flex flex-col sm:flex-row sm:items-stretch gap-4 sm:gap-5">
+            <div class="flex-1 min-w-0">
+              <p class="text-[10px] font-mono uppercase tracking-wider text-muted mb-2">Statistique</p>
+              <div class="flex flex-wrap gap-2" id="chart-cat-nav">
+                ${window.STAT_CATEGORIES.map(
+                  (c) => `<button data-key="${c.key}" class="chip-btn ${c.key === chartStatKey ? "active" : ""}">${c.icon} ${c.short}</button>`
+                ).join("")}
+              </div>
+            </div>
+            <div class="hidden sm:block w-px bg-border shrink-0"></div>
+            <div class="sm:w-[240px] shrink-0">
+              <p class="text-[10px] font-mono uppercase tracking-wider text-muted mb-2">Période</p>
+              <div class="flex flex-wrap gap-2" id="chart-period-nav">${periodChipsHTML()}</div>
+            </div>
+          </div>
         </div>
         <div class="card p-4">
+          <p id="evo-empty" class="hidden text-sm text-muted py-6 text-center">Pas encore assez de données historiques sur cette période pour tracer une courbe.</p>
           <canvas id="evo-chart" height="90"></canvas>
         </div>
       </section>
 
       <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕑 Historique de connexions</p>
-        <div id="sessions-list" class="card divide-y divide-border">${window.skeletonRows(4, "h-12")}</div>
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">📊 Classement du joueur</p>
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">${rankGridHTML(p.uuid, allStats)}</div>
+      </section>
+
+      <section class="mb-8">
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕸️ Profil vs moyenne du serveur</p>
+        <div class="card p-4 mb-4">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p class="text-sm text-muted">Comparaison du joueur sur 6 statistiques clés du serveur.</p>
+            <div class="flex flex-wrap gap-2" id="radar-mode-nav">
+              <button data-mode="avg" class="chip-btn ${radarMode === "avg" ? "active" : ""}">📊 Moyenne serveur</button>
+              <button data-mode="record" class="chip-btn ${radarMode === "record" ? "active" : ""}">🏆 Record serveur</button>
+            </div>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div class="card p-4" style="height:340px"><canvas id="profil-radar"></canvas></div>
+          <div class="card divide-y divide-border" id="radar-breakdown"></div>
+        </div>
+      </section>
+
+      <section class="mb-8">
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🃏 Player Card</p>
+        <div class="card p-5">
+          <div class="grid grid-cols-1 lg:grid-cols-[1fr_220px] gap-6 items-start">
+            <div>
+              <p class="text-sm text-muted mb-3">
+                Choisis jusqu'à ${MAX_CARD_STATS} statistiques à afficher sur la carte
+                (<span class="text-ink font-medium" id="card-count">0</span>/${MAX_CARD_STATS} sélectionnée(s)).
+              </p>
+              <div class="flex flex-wrap gap-2 mb-5" id="card-stat-nav">${cardStatChipsHTML()}</div>
+              <button id="gen-card-btn" class="chip-btn active !bg-gradient-to-b !from-enchant !to-enchant2 !px-5 !py-2.5">
+                ⬇️ Télécharger la Player Card
+              </button>
+              <p class="text-[11px] text-muted mt-2">L'aperçu à droite est à l'échelle — le fichier téléchargé est en haute résolution.</p>
+            </div>
+            <div class="mx-auto lg:mx-0">
+              <p class="text-[10px] font-mono uppercase tracking-wider text-muted mb-2 text-center lg:text-left">Aperçu</p>
+              <div class="relative shrink-0 rounded-[20px] overflow-hidden shadow-card" style="width:220px;aspect-ratio:3/4;">
+                <div id="player-card-preview-inner" style="width:380px;aspect-ratio:3/4;transform-origin:top left;transform:scale(0.5789);"></div>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section>
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🃏 Player Card</p>
-        <div class="card p-5">
-          <p class="text-sm text-muted mb-3">
-            Choisis jusqu'à ${MAX_CARD_STATS} statistiques à afficher sur la carte
-            (<span class="text-ink font-medium" id="card-count">0</span>/${MAX_CARD_STATS} sélectionnée(s)).
-          </p>
-          <div class="flex flex-wrap gap-2 mb-4" id="card-stat-nav">${cardStatChipsHTML()}</div>
-          <button id="gen-card-btn" class="chip-btn active !bg-gradient-to-b !from-enchant !to-enchant2">
-            ⬇️ Télécharger la Player Card
-          </button>
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕑 Historique de connexions</p>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
+          <div class="card p-3">
+            <p class="text-[10px] font-mono uppercase text-muted truncate">📅 Sessions totales</p>
+            <p class="font-mono font-bold text-lg">${sessionsCount != null ? window.fmt.int(sessionsCount) : "—"}</p>
+          </div>
+          <div class="card p-3">
+            <p class="text-[10px] font-mono uppercase text-muted truncate">⏱️ Durée moyenne</p>
+            <p class="font-mono font-bold text-lg">${avgSeconds ? window.fmt.duration(avgSeconds) : "—"}</p>
+          </div>
+          <div class="card p-3">
+            <p class="text-[10px] font-mono uppercase text-muted truncate">🔥 Session la + longue</p>
+            <p class="font-mono font-bold text-lg">${longestSeconds ? window.fmt.duration(longestSeconds) : "—"}</p>
+          </div>
         </div>
+        ${summaryNote}
+        <div id="sessions-list" class="card divide-y divide-border">${sessionsListHTML(sessions)}</div>
       </section>
     `;
   }
@@ -225,38 +436,79 @@ window.PageProfil = (() => {
   }
 
   async function renderChart(uuid) {
-    const history = await fetchHistory(uuid, chartStatKey);
     const canvas = document.getElementById("evo-chart");
+    const emptyMsg = document.getElementById("evo-empty");
     if (!canvas) return;
-    if (chartInstance) chartInstance.destroy();
+    if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+
+    const fullHistory = await fetchHistory(uuid, chartStatKey);
+    const history = filterHistoryByPeriod(fullHistory, chartPeriod);
 
     if (history.length < 2) {
-      canvas.parentElement.innerHTML = `<p class="text-sm text-muted py-6 text-center">Pas encore assez de données historiques pour tracer une courbe (reviens après quelques sauvegardes groupées).</p>`;
+      canvas.classList.add("hidden");
+      if (emptyMsg) emptyMsg.classList.remove("hidden");
       return;
     }
+    canvas.classList.remove("hidden");
+    if (emptyMsg) emptyMsg.classList.add("hidden");
+
+    const cat = window.statByKey(chartStatKey);
+
+    const labelFormat =
+      chartPeriod === "year" || chartPeriod === "all"
+        ? { day: "2-digit", month: "2-digit", year: "2-digit" }
+        : { day: "2-digit", month: "2-digit" };
 
     chartInstance = new Chart(canvas.getContext("2d"), {
       type: "line",
       data: {
-        labels: history.map((h) => new Date(h.recorded_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })),
+        labels: history.map((h) => new Date(h.recorded_at).toLocaleDateString("fr-FR", labelFormat)),
         datasets: [
           {
-            label: window.statByKey(chartStatKey).label,
+            label: cat.label,
             data: history.map((h) => h[chartStatKey]),
             borderColor: "#8B6CF2",
             backgroundColor: "rgba(139,108,242,.15)",
             fill: true,
             tension: 0.3,
             pointRadius: 0,
+            pointHoverRadius: 5,
+            pointHoverBackgroundColor: "#F2B33D",
+            pointHoverBorderColor: "#0B0F14",
+            pointHoverBorderWidth: 2,
           },
         ],
       },
       options: {
         responsive: true,
-        plugins: { legend: { display: false } },
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: "#1A222D",
+            borderColor: "#26313D",
+            borderWidth: 1,
+            titleColor: "#E9EEF3",
+            bodyColor: "#F2B33D",
+            titleFont: { family: "JetBrains Mono", size: 11 },
+            bodyFont: { family: "JetBrains Mono", size: 12, weight: "bold" },
+            padding: 10,
+            displayColors: false,
+            callbacks: {
+              title: (items) => window.fmt.dateTime(history[items[0].dataIndex].recorded_at),
+              label: (item) => `${cat.icon} ${cat.label} : ${window.fmt.statValue(chartStatKey, item.parsed.y)}`,
+            },
+          },
+        },
         scales: {
           x: { ticks: { color: "#8B98A8" }, grid: { color: "#1A222D" } },
-          y: { ticks: { color: "#8B98A8" }, grid: { color: "#1A222D" } },
+          y: {
+            ticks: {
+              color: "#8B98A8",
+              callback: (value) => window.fmt.statValue(chartStatKey, value),
+            },
+            grid: { color: "#1A222D" },
+          },
         },
       },
     });
@@ -264,21 +516,49 @@ window.PageProfil = (() => {
 
   function renderProfileRadar(uuid, allStats) {
     const canvas = document.getElementById("profil-radar");
+    const breakdown = document.getElementById("radar-breakdown");
     if (!canvas) return;
     if (radarInstance) radarInstance.destroy();
-    const { labels, playerData, avgData } = radarVsAverage(uuid, allStats);
+
+    const { chartLabels, chartPlayerData, chartCompareData, rows } = computeRadarData(uuid, allStats, radarMode);
+    const compareLabel = radarMode === "record" ? "Record du serveur" : "Moyenne du serveur";
+
     radarInstance = new Chart(canvas.getContext("2d"), {
       type: "radar",
       data: {
-        labels,
+        labels: chartLabels,
         datasets: [
-          { label: "Moyenne du serveur", data: avgData, borderColor: "#8B98A8", backgroundColor: "rgba(139,152,168,.12)", pointRadius: 2 },
-          { label: "Ce joueur", data: playerData, borderColor: "#F2B33D", backgroundColor: "rgba(242,179,61,.25)", pointRadius: 2 },
+          { label: compareLabel, data: chartCompareData, borderColor: "#8B98A8", backgroundColor: "rgba(139,152,168,.12)", pointRadius: 2 },
+          {
+            label: "Ce joueur",
+            data: chartPlayerData,
+            borderColor: "#F2B33D",
+            backgroundColor: "rgba(242,179,61,.25)",
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            pointBackgroundColor: "#F2B33D",
+          },
         ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: "bottom", labels: { color: "#8B98A8", font: { size: 11 } } } },
+        interaction: { mode: "nearest", intersect: false },
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: { color: "#8B98A8", font: { size: 11 }, usePointStyle: true, pointStyle: "circle", boxHeight: 8 },
+          },
+          tooltip: {
+            backgroundColor: "#1A222D",
+            borderColor: "#26313D",
+            borderWidth: 1,
+            titleColor: "#E9EEF3",
+            bodyColor: "#E9EEF3",
+            titleFont: { family: "JetBrains Mono", size: 11 },
+            bodyFont: { family: "JetBrains Mono", size: 12 },
+            padding: 10,
+          },
+        },
         scales: {
           r: {
             angleLines: { color: "#1A222D" },
@@ -290,12 +570,60 @@ window.PageProfil = (() => {
         },
       },
     });
+
+    if (breakdown) breakdown.innerHTML = radarBreakdownHTML(rows, radarMode);
   }
 
-  // ---------- Player Card (export image) ----------
-  function buildPlayerCardNode(p, selectedKeys, globalRank) {
-    const node = window.el("div", { id: "player-card-export" });
-    node.innerHTML = `
+  // ---------- Skin 3D interactif (rotation à la souris/au doigt) ----------
+  let skinview3dLibPromise = null;
+  function loadSkinview3DLib() {
+    // Chargement paresseux du module (une seule fois) : le paquet npm skinview3d
+    // n'expose pas de bundle UMD global fiable sur les CDN, on passe donc par
+    // l'endpoint ESM de jsDelivr et un import() dynamique.
+    if (!skinview3dLibPromise) {
+      skinview3dLibPromise = import("https://cdn.jsdelivr.net/npm/skinview3d@3.4.1/+esm");
+    }
+    return skinview3dLibPromise;
+  }
+
+  async function renderSkin3D(uuid) {
+    const canvas = document.getElementById("profil-skin-3d");
+    if (!canvas) return;
+
+    if (skinViewer3D) {
+      skinViewer3D.dispose();
+      skinViewer3D = null;
+    }
+
+    let lib;
+    try {
+      lib = await loadSkinview3DLib();
+    } catch (e) {
+      console.error("Impossible de charger skinview3d", e);
+      canvas.parentElement.innerHTML = `<div class="w-full h-full flex items-center justify-center text-muted text-xs font-mono px-3 text-center">Skin 3D indisponible (chargement de la librairie impossible)</div>`;
+      return;
+    }
+
+    // Le canvas peut avoir été remplacé entre-temps si le profil a re-render pendant le chargement.
+    const liveCanvas = document.getElementById("profil-skin-3d");
+    if (!liveCanvas) return;
+
+    const rect = liveCanvas.parentElement.getBoundingClientRect();
+    skinViewer3D = new lib.SkinViewer({
+      canvas: liveCanvas,
+      width: rect.width || 220,
+      height: rect.height || 280,
+      skin: `https://mc-heads.net/skin/${uuid}`,
+    });
+    skinViewer3D.autoRotate = false;
+    skinViewer3D.controls.enableZoom = false;
+    skinViewer3D.controls.enablePan = false;
+    skinViewer3D.zoom = 0.9;
+  }
+
+  // ---------- Player Card (export image + aperçu en direct) ----------
+  function playerCardInnerHTML(p, selectedKeys, globalRank) {
+    return `
       <div style="position:absolute;inset:0;background:linear-gradient(160deg,#1A1030,#0B0F14 55%,#0B0F14);"></div>
       <div style="position:absolute;inset:0;box-shadow:inset 0 0 0 2px rgba(242,179,61,.5);border-radius:20px;"></div>
       <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;height:100%;padding:22px 18px;">
@@ -319,6 +647,32 @@ window.PageProfil = (() => {
         </div>
       </div>
     `;
+  }
+
+  function playerCardEmptyPreviewHTML() {
+    return `
+      <div style="position:absolute;inset:0;background:linear-gradient(160deg,#1A1030,#0B0F14 55%,#0B0F14);"></div>
+      <div style="position:absolute;inset:0;box-shadow:inset 0 0 0 2px #26313D;border-radius:20px;"></div>
+      <div style="position:relative;z-index:1;display:flex;align-items:center;justify-content:center;height:100%;padding:24px;text-align:center;font-size:13px;color:#8B98A8;">
+        Choisis au moins une statistique pour voir l'aperçu
+      </div>
+    `;
+  }
+
+  function updatePlayerCardPreview(p, allStats) {
+    const wrap = document.getElementById("player-card-preview-inner");
+    if (!wrap) return;
+    if (!cardSelectedKeys.length) {
+      wrap.innerHTML = playerCardEmptyPreviewHTML();
+      return;
+    }
+    const globalRank = rankOf(p.uuid, "playtime_seconds", allStats);
+    wrap.innerHTML = playerCardInnerHTML(p, cardSelectedKeys, globalRank);
+  }
+
+  function buildPlayerCardNode(p, selectedKeys, globalRank) {
+    const node = window.el("div", { id: "player-card-export" });
+    node.innerHTML = playerCardInnerHTML(p, selectedKeys, globalRank);
     return node;
   }
 
@@ -383,14 +737,42 @@ window.PageProfil = (() => {
         return;
       }
       currentPlayer = p;
+      history.replaceState(null, "", profileShareUrl(p.username));
 
       // sélection par défaut de la Player Card = les 3 meilleures catégories du joueur
-      const allStats = await fetchAllStats();
+      const [allStats, sessions, sessionsCount] = await Promise.all([
+        fetchAllStats(),
+        fetchSessions(p.uuid),
+        fetchSessionsCount(p.uuid),
+      ]);
       cardSelectedKeys = bestCategoryKeys(p.uuid, allStats, MAX_CARD_STATS);
 
-      wrap.innerHTML = await profileHTML(p, allStats);
+      wrap.innerHTML = await profileHTML(p, allStats, sessions, sessionsCount);
       updateCardCountLabel();
       renderProfileRadar(p.uuid, allStats);
+      renderSkin3D(p.uuid);
+      updatePlayerCardPreview(p, allStats);
+
+      document.getElementById("fav-toggle-btn").addEventListener("click", (e) => {
+        toggleFavorite(p.username);
+        const nowFav = isFavorite(p.username);
+        const btn = e.currentTarget;
+        btn.textContent = nowFav ? "★" : "☆";
+        btn.classList.toggle("text-gold", nowFav);
+        btn.classList.toggle("text-muted", !nowFav);
+        btn.title = nowFav ? "Retirer des favoris" : "Ajouter aux favoris";
+        renderFavoritesRow();
+      });
+
+      document.getElementById("share-profile-btn").addEventListener("click", async (e) => {
+        const url = profileShareUrl(p.username);
+        try {
+          await navigator.clipboard.writeText(url);
+          window.showToast("Lien du profil copié !", "success");
+        } catch (err) {
+          window.showToast("Impossible de copier le lien", "error");
+        }
+      });
 
       document.getElementById("chart-cat-nav").addEventListener("click", (e) => {
         const btn = e.target.closest("button[data-key]");
@@ -398,6 +780,22 @@ window.PageProfil = (() => {
         chartStatKey = btn.dataset.key;
         window.$$("#chart-cat-nav .chip-btn").forEach((b) => b.classList.toggle("active", b === btn));
         renderChart(p.uuid);
+      });
+
+      document.getElementById("chart-period-nav").addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-period]");
+        if (!btn) return;
+        chartPeriod = btn.dataset.period;
+        window.$$("#chart-period-nav .chip-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        renderChart(p.uuid);
+      });
+
+      document.getElementById("radar-mode-nav").addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-mode]");
+        if (!btn) return;
+        radarMode = btn.dataset.mode;
+        window.$$("#radar-mode-nav .chip-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        renderProfileRadar(p.uuid, allStats);
       });
 
       document.getElementById("card-stat-nav").addEventListener("click", (e) => {
@@ -416,14 +814,12 @@ window.PageProfil = (() => {
           btn.classList.add("active");
         }
         updateCardCountLabel();
+        updatePlayerCardPreview(p, allStats);
       });
 
       document.getElementById("gen-card-btn").addEventListener("click", () => generatePlayerCard(p));
 
       renderChart(p.uuid);
-      fetchSessions(p.uuid).then((sessions) => {
-        document.getElementById("sessions-list").innerHTML = sessionsListHTML(sessions);
-      });
     } catch (e) {
       console.error(e);
       wrap.innerHTML = `<p class="text-red text-sm">Erreur lors du chargement du profil.</p>`;
@@ -438,8 +834,39 @@ window.PageProfil = (() => {
         <p class="text-muted text-sm mt-1">Toutes les informations d'un joueur, en détail.</p>
       </header>
       ${searchBarHTML()}
+      <div id="profil-favorites"></div>
       <div id="profil-content">${emptyStateHTML()}</div>
     `;
+  }
+
+  function favoritesRowHTML() {
+    const favs = getFavorites();
+    if (!favs.length) return "";
+    return `
+      <div class="flex items-center gap-2 flex-wrap mb-6">
+        <span class="text-[10px] font-mono uppercase tracking-wider text-muted mr-1 shrink-0">⭐ Favoris :</span>
+        ${favs
+          .map(
+            (u) => `<button data-fav-pick="${u}" class="chip-btn !py-1.5 !px-2.5 flex items-center gap-1.5">
+                      <img src="${window.avatarHead(u, 16)}" class="w-4 h-4 rounded" alt="" />${u}
+                    </button>`
+          )
+          .join("")}
+      </div>`;
+  }
+
+  function renderFavoritesRow() {
+    const el = document.getElementById("profil-favorites");
+    if (!el) return;
+    el.innerHTML = favoritesRowHTML();
+    el.querySelectorAll("button[data-fav-pick]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const uname = btn.dataset.favPick;
+        const input = document.getElementById("profil-search");
+        if (input) input.value = uname;
+        loadProfile(uname);
+      });
+    });
   }
 
   function bindEvents() {
@@ -470,14 +897,25 @@ window.PageProfil = (() => {
     allStatsCache = null;
     renderAll();
     bindEvents();
+    renderFavoritesRow();
     try {
       allPlayers = await fetchAllPlayersLight();
     } catch (e) {
       console.error(e);
     }
+
+    // Lien partageable : #profil?p=Pseudo charge directement ce profil.
+    const sharedUsername = getUsernameFromHash();
+    if (sharedUsername) {
+      const input = document.getElementById("profil-search");
+      if (input) input.value = sharedUsername;
+      loadProfile(sharedUsername);
+    }
+
     return () => {
       if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
       if (radarInstance) { radarInstance.destroy(); radarInstance = null; }
+      if (skinViewer3D) { skinViewer3D.dispose(); skinViewer3D = null; }
     };
   }
 

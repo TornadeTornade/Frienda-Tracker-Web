@@ -16,8 +16,9 @@ function currentCleanup() {
 
 function route() {
   currentCleanup();
-  const hash = location.hash || "#classement";
-  const handler = window.ROUTES[hash] || window.ROUTES["#classement"];
+  const fullHash = location.hash || "#classement";
+  const routeKey = fullHash.split("?")[0]; // ← ignore la query string pour le matching
+  const handler = window.ROUTES[routeKey] || window.ROUTES["#classement"];
   const root = document.getElementById("page-root");
   root.scrollTo?.(0, 0);
   window.scrollTo(0, 0);

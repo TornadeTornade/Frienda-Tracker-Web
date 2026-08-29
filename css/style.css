@@ -73,6 +73,28 @@
   background: #121821;
   border: 1px solid #26313D;
   border-radius: 14px;
+  /* Même relief que le reste du site (cf. shadow-card dans tailwind.config) :
+     avant, .card n'avait ni ombre ni profondeur, ce qui la faisait paraître
+     plate par rapport à la sidebar (shadow-slot) et au podium (glow). */
+  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+/* ============ Icône en "slot" (même logique que .nav-ic / .rank-badge) ============
+   Utilisé partout où une icône/emoji accompagne un titre ou une valeur
+   (stat cards, titres de section) au lieu de la laisser flotter en texte brut. */
+.stat-icon {
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  border-radius: 8px;
+  background: #0B0F14;
+  box-shadow: inset 0 0 0 1px #26313D;
+  flex-shrink: 0;
+}
+.stat-icon.sm {
+  width: 26px; height: 26px;
+  font-size: 13px;
+  border-radius: 6px;
 }
 
 /* ============ Player row (classement) ============ */

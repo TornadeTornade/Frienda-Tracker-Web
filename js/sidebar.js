@@ -5,16 +5,24 @@ window.SIDEBAR_PAGES = [
   { hash: "#profil", label: "Profils", icon: "🙂" },
   { hash: "#stats", label: "Serveur Stats", icon: "📊" },
   { hash: "#live", label: "Live Feed", icon: "🔴" },
+  { href: "https://frienda.vercel.app/", label: "Wiki", icon: "📖", external: true },
 ];
 
 function renderSidebar() {
   const nav = document.getElementById("sidebar-nav");
   nav.innerHTML = "";
   window.SIDEBAR_PAGES.forEach((p) => {
-    const a = window.el("a", {
-      href: p.hash,
+    const props = {
+      href: p.href || p.hash,
       class: "nav-slot",
-    }, [
+    };
+
+    if (p.external) {
+      props.target = "_blank";
+      props.rel = "noopener noreferrer";
+    }
+
+    const a = window.el("a", props, [
       window.el("span", { class: "nav-ic" }, p.icon),
       window.el("span", {}, p.label),
     ]);
