@@ -7,7 +7,10 @@ window.PageServerStats = (() => {
     { key: "all", label: "Total", days: null },
   ];
   const DAY_LABELS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
-  const RADAR_KEYS = ["playtime_seconds", "player_kills", "mob_kills", "blocks_broken", "distance_meters", "jumps"];
+  // Statistiques affichées dans la section "Profil" — le joueur moyen
+  // comparé au record du serveur sur chacune d'elles.
+  const PROFILE_KEYS = ["playtime_seconds", "player_kills", "mob_kills", "blocks_broken", "distance_meters", "jumps"];
+
   const CHART_COLORS = {
     enchant: "#8B6CF2",
     enchant2: "#6D4FE0",
@@ -19,9 +22,27 @@ window.PageServerStats = (() => {
     muted: "#8B98A8",
     grid: "#1A222D",
   };
+  const MEDAL_COLORS = [CHART_COLORS.gold, CHART_COLORS.silver, CHART_COLORS.bronze];
+
+  // Nouvelle table des matières : la page ne raconte plus "voici des
+  // cartes", elle raconte "voici le pouls du serveur, puis ses joueurs, ses
+  // combats, ses records, son profil".
+  const SECTIONS = [
+    { id: "sec-pouls", label: "Pouls" },
+    { id: "sec-joueurs", label: "Joueurs" },
+    { id: "sec-combat", label: "Combat" },
+    { id: "sec-records", label: "Records" },
+    { id: "sec-profil", label: "Profil" },
+  ];
 
   let activePeriod = "month";
-  let charts = {}; // id -> Chart instance
+  let charts = {};
+  let sectionObserver = null;
+  // Sessions de la période actuellement chargée, gardées en mémoire pour
+  // que le clic sur un point/une barre "Tendance sur la période" puisse
+  // retrouver le détail jour par jour sans re-fetch.
+  let currentSessions = [];
+  let selectedDayIso = null;
 
   // ---------------------------------------------------------------
   // Fetch
@@ -34,44 +55,57 @@ window.PageServerStats = (() => {
     return d.toISOString();
   }
 
+  function previousPeriodRange(key) {
+    const p = PERIODS.find((x) => x.key === key);
+    if (!p.days) return null;
+    const untilIso = periodStartDate(key);
+    const prevStart = new Date();
+    prevStart.setDate(prevStart.getDate() - p.days * 2);
+    return { sinceIso: prevStart.toISOString(), untilIso };
+  }
+
   async function fetchPlayers() {
     const { data, error } = await window.sb.from("player_stats").select("*");
     if (error) throw error;
     return data ?? [];
   }
 
-  async function fetchFirstSeen(sinceIso) {
+  async function fetchFirstSeen(sinceIso, untilIso) {
     let q = window.sb.from("player_stats").select("uuid, username, first_seen").order("first_seen");
     if (sinceIso) q = q.gte("first_seen", sinceIso);
+    if (untilIso) q = q.lt("first_seen", untilIso);
     const { data, error } = await q;
     if (error) throw error;
     return data ?? [];
   }
 
-  async function fetchSessions(sinceIso) {
+  async function fetchSessions(sinceIso, untilIso) {
     let q = window.sb
       .from("player_sessions")
       .select("uuid, username, joined_at, left_at, session_seconds")
       .order("joined_at");
     if (sinceIso) q = q.gte("joined_at", sinceIso);
+    if (untilIso) q = q.lt("joined_at", untilIso);
     const { data, error } = await q;
     if (error) throw error;
     return data ?? [];
   }
 
-  async function fetchHistorySince(sinceIso) {
-    let q = window.sb
-      .from("player_stats_history")
-      .select("uuid, recorded_at, playtime_seconds, blocks_broken")
-      .order("recorded_at");
-    if (sinceIso) q = q.gte("recorded_at", sinceIso);
-    const { data, error } = await q;
+  async function fetchLastSeen() {
+    const { data, error } = await window.sb
+      .from("player_sessions")
+      .select("uuid, username, joined_at")
+      .order("joined_at", { ascending: false });
     if (error) throw error;
-    return data ?? [];
+    const lastByUuid = {};
+    (data ?? []).forEach((row) => {
+      if (!lastByUuid[row.uuid]) lastByUuid[row.uuid] = row;
+    });
+    return Object.values(lastByUuid);
   }
 
   // ---------------------------------------------------------------
-  // Helpers de rendu
+  // Petits composants
   // ---------------------------------------------------------------
   function periodNavHTML() {
     return PERIODS.map(
@@ -79,26 +113,83 @@ window.PageServerStats = (() => {
     ).join("");
   }
 
-  function statCard(icon, label, value, sub) {
+  function periodBadge(kind) {
+    if (kind === "period") {
+      return `<span class="ml-2 align-middle text-[9px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-enchant/15 text-enchant border border-enchant/30">Période</span>`;
+    }
+    return `<span class="ml-2 align-middle text-[9px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-surface2 text-muted border border-border">All-time</span>`;
+  }
+
+  function sectionTitle(icon, text, badgeKind, caption) {
     return `
-      <div class="card p-4">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted">${icon} ${label}</p>
-        <p class="font-mono font-extrabold text-2xl mt-1">${value}</p>
-        ${sub ? `<p class="text-xs text-muted mt-1">${sub}</p>` : ""}
+      <div class="mb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="stat-icon sm">${icon}</div>
+          <p class="font-sans text-[15px] font-bold text-ink leading-tight">${text}${badgeKind ? periodBadge(badgeKind) : ""}</p>
+        </div>
+        ${caption ? `<p class="text-xs text-muted mt-1 ml-[38px]">${caption}</p>` : ""}
       </div>`;
   }
 
-  function chartCard(id, title, height = 220) {
+  // Sous-en-tête discret DANS une section (ex: "En bref" avant les stat
+  // cards, "Quand est-ce que ça joue ?" avant les graphiques d'horaires) —
+  // pour donner un fil de lecture au lieu d'un mur de cartes identiques.
+  function subHeading(text) {
+    return `<p class="text-[10px] font-mono uppercase tracking-widest text-muted/70 mb-2 mt-6 first:mt-0">${text}</p>`;
+  }
+
+  function statCard(icon, label, value, sub, badgeKind) {
     return `
       <div class="card p-4">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">${title}</p>
+        <div class="flex items-center gap-2.5 mb-2">
+          <div class="stat-icon">${icon}</div>
+          <p class="font-sans text-[13px] font-semibold text-muted leading-tight">${label}${badgeKind ? periodBadge(badgeKind) : ""}</p>
+        </div>
+        <p class="font-mono font-extrabold text-2xl">${value}</p>
+        ${sub ? `<p class="text-xs mt-1">${sub}</p>` : ""}
+      </div>`;
+  }
+
+  // Tuile de record : pas de graphique, juste icône + nombre. Un total
+  // cumulé (ex: "12 480 sauts") n'a rien à comparer visuellement — un bar
+  // chart pour ça n'ajoutait rien qu'un gros nombre en gras ne dit déjà.
+  function recordTile(icon, label, value) {
+    return `
+      <div class="card p-4 flex items-center gap-3">
+        <div class="stat-icon shrink-0">${icon}</div>
+        <div class="min-w-0">
+          <p class="text-[10px] font-mono uppercase tracking-wider text-muted truncate">${label}</p>
+          <p class="font-mono font-extrabold text-xl text-ink truncate">${value}</p>
+        </div>
+      </div>`;
+  }
+
+  function chartCard(id, title, caption, height = 220) {
+    return `
+      <div class="card p-4">
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted">${title}</p>
+        <p class="text-[11px] text-muted/70 mb-3 min-h-[14px]">${caption ?? ""}</p>
         <div style="height:${height}px"><canvas id="${id}"></canvas></div>
       </div>`;
+  }
+
+  function emptyStateHTML(msg) {
+    return `<div class="h-full flex items-center justify-center min-h-[100px]"><p class="text-sm text-muted text-center px-6">${msg}</p></div>`;
+  }
+
+  function renderEmptyIfNeeded(canvas, condition, msg) {
+    if (!condition) return false;
+    canvas.parentElement.innerHTML = emptyStateHTML(msg);
+    return true;
   }
 
   function destroyCharts() {
     Object.values(charts).forEach((c) => c && c.destroy());
     charts = {};
+    if (sectionObserver) {
+      sectionObserver.disconnect();
+      sectionObserver = null;
+    }
   }
 
   const axisOpts = {
@@ -106,54 +197,46 @@ window.PageServerStats = (() => {
     grid: { color: CHART_COLORS.grid },
   };
 
+  function trendSub(delta, { fallback = "" } = {}) {
+    if (delta === undefined) return fallback;
+    if (delta === null) return `<span class="font-mono text-green">↑ nouveau ce cycle</span>`;
+    const flat = Math.abs(delta) < 1;
+    const up = delta > 0;
+    const cls = flat ? "text-muted" : up ? "text-green" : "text-red";
+    const arrow = flat ? "→" : up ? "↑" : "↓";
+    return `<span class="font-mono ${cls}">${arrow} ${Math.abs(delta).toFixed(0)}% vs période précédente</span>`;
+  }
+
+  function deltaPct(cur, prev, hasPrev) {
+    if (!hasPrev) return undefined;
+    if (prev === 0) return cur === 0 ? 0 : null;
+    return ((cur - prev) / prev) * 100;
+  }
+
   // ---------------------------------------------------------------
-  // Heatmap heures de pointe
+  // Calculs
   // ---------------------------------------------------------------
-  function buildHeatmapMatrix(sessions) {
-    const matrix = Array.from({ length: 7 }, () => Array(24).fill(0));
+
+  // Remplace intégralement le heatmap 7×24. Un lecteur devait décoder une
+  // grille de 168 cellules colorées, sans légende de valeurs, pour répondre
+  // à une question simple : "à quelle heure / quel jour ça joue le plus ?".
+  // Deux bar charts triés répondent à la même question en une seconde,
+  // avec des axes lisibles et des valeurs exactes au survol.
+  function peakHours(sessions) {
+    const counts = Array(24).fill(0);
+    sessions.forEach((s) => counts[new Date(s.joined_at).getHours()]++);
+    return counts;
+  }
+
+  function peakDays(sessions) {
+    const counts = Array(7).fill(0);
     sessions.forEach((s) => {
-      const d = new Date(s.joined_at);
-      let day = d.getDay();
-      day = day === 0 ? 6 : day - 1;
-      matrix[day][d.getHours()]++;
+      const d = new Date(s.joined_at).getDay();
+      counts[d === 0 ? 6 : d - 1]++;
     });
-    return matrix;
+    return counts;
   }
 
-  function heatmapHTML(matrix) {
-    const max = Math.max(1, ...matrix.flat());
-    const cellColor = (v) => {
-      if (v === 0) return "#151B23";
-      const intensity = v / max;
-      const r = Math.round(139 + (242 - 139) * intensity);
-      const g = Math.round(108 + (179 - 108) * intensity);
-      const b = Math.round(242 + (61 - 242) * intensity);
-      return `rgba(${r},${g},${b},${0.25 + intensity * 0.75})`;
-    };
-    let rows = "";
-    for (let day = 0; day < 7; day++) {
-      let cells = "";
-      for (let hour = 0; hour < 24; hour++) {
-        const v = matrix[day][hour];
-        cells += `<div class="heat-cell w-full aspect-square" title="${DAY_LABELS[day]} ${hour}h : ${v} connexion(s)" style="background:${cellColor(v)}"></div>`;
-      }
-      rows += `<div class="grid gap-[3px] items-center mb-[3px]" style="grid-template-columns:repeat(24,minmax(0,1fr));">${cells}</div>`;
-    }
-    return `
-      <div class="flex gap-2">
-        <div class="flex flex-col justify-between py-[2px] text-[10px] font-mono text-muted shrink-0">
-          ${DAY_LABELS.map((d) => `<span style="height:calc(100% / 7)">${d}</span>`).join("")}
-        </div>
-        <div class="flex-1">${rows}</div>
-      </div>
-      <div class="flex justify-between text-[10px] font-mono text-muted mt-2 px-8">
-        <span>0h</span><span>6h</span><span>12h</span><span>18h</span><span>23h</span>
-      </div>`;
-  }
-
-  // ---------------------------------------------------------------
-  // Calculs pour les graphiques
-  // ---------------------------------------------------------------
   function sessionsPerDay(sessions) {
     const byDay = {};
     sessions.forEach((s) => {
@@ -174,43 +257,40 @@ window.PageServerStats = (() => {
     };
   }
 
-  function communityPlaytimeSeries(history) {
-    // pour chaque joueur, on garde le dernier instantané connu par jour,
-    // puis on additionne entre joueurs -> courbe de croissance cumulée.
-    const perDayPerPlayer = {}; // day -> uuid -> value
-    history.forEach((h) => {
-      const day = new Date(h.recorded_at).toISOString().slice(0, 10);
-      perDayPerPlayer[day] = perDayPerPlayer[day] || {};
-      perDayPerPlayer[day][h.uuid] = h.playtime_seconds;
+  function activePlayersPerDay(sessions) {
+    const byDay = {};
+    sessions.forEach((s) => {
+      const day = new Date(s.joined_at).toISOString().slice(0, 10);
+      if (!byDay[day]) byDay[day] = new Set();
+      byDay[day].add(s.uuid);
     });
-    const days = Object.keys(perDayPerPlayer).sort();
-    // report du dernier total connu pour les joueurs absents un jour donné
-    const lastKnown = {};
-    const totals = days.map((day) => {
-      Object.assign(lastKnown, perDayPerPlayer[day]);
-      return Object.values(lastKnown).reduce((a, b) => a + b, 0);
-    });
-    return { labels: days, totals };
+    const labels = Object.keys(byDay).sort();
+    return { labels, counts: labels.map((l) => byDay[l].size) };
   }
 
-  function totalsByCategory(players) {
-    return window.STAT_CATEGORIES.map((c) => ({
-      cat: c,
-      total: players.reduce((sum, p) => sum + (p[c.key] ?? 0), 0),
-    }));
+  // Exclut aussi distance_meters : déjà mis en avant comme "fun fact" dédié
+  // juste sous le hero, pas la peine de le répéter une 2e fois en tuile.
+  function recordCategories(players) {
+    return window.STAT_CATEGORIES.filter(
+      (c) => !["distance_meters"].includes(c.key)
+    ).map((c) => ({ cat: c, total: players.reduce((sum, p) => sum + (p[c.key] ?? 0), 0) }));
   }
 
-  function radarProfile(players) {
-    const avgData = [];
-    const topData = [];
-    RADAR_KEYS.forEach((key) => {
+  // Pour chaque statistique du profil : la moyenne de tous les joueurs,
+  // le record actuel du serveur (et qui le détient), et le % que représente
+  // la moyenne par rapport à ce record. Ces valeurs alimentent à la fois le
+  // radar (l'axe) et la légende (le détail exact, pour ne pas laisser le
+  // "100%" de chaque axe sans explication).
+  function serverProfileRows(players) {
+    return PROFILE_KEYS.map((key) => {
+      const cat = window.statByKey(key);
       const values = players.map((p) => p[key] ?? 0);
-      const max = Math.max(1, ...values);
-      const avg = values.reduce((a, b) => a + b, 0) / (values.length || 1);
-      avgData.push(Math.round((avg / max) * 100));
-      topData.push(100);
+      const max = Math.max(0, ...values);
+      const holder = max > 0 ? players.find((p) => (p[key] ?? 0) === max) : null;
+      const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+      const pct = max > 0 ? Math.round((avg / max) * 100) : 0;
+      return { key, icon: cat.icon, label: cat.label, avg, max, pct, holderName: holder ? holder.username : null };
     });
-    return { labels: RADAR_KEYS.map((k) => window.statByKey(k).short), avgData, topData };
   }
 
   const DURATION_BUCKETS = [
@@ -222,17 +302,16 @@ window.PageServerStats = (() => {
   ];
 
   function sessionDurationHistogram(sessions) {
+    const finished = sessions.filter((s) => s.session_seconds != null);
     const counts = DURATION_BUCKETS.map(() => 0);
-    sessions.forEach((s) => {
-      if (s.session_seconds == null) return;
+    finished.forEach((s) => {
       const idx = DURATION_BUCKETS.findIndex((b) => s.session_seconds < b.max);
       counts[idx === -1 ? DURATION_BUCKETS.length - 1 : idx]++;
     });
-    return counts;
+    return { counts, finishedCount: finished.length };
   }
 
   function newPlayersPerBucket(firstSeenRows, sinceIso) {
-    // regroupe par jour si période courte (semaine/mois), par mois pour année/total
     const groupByMonth = !sinceIso || (new Date() - new Date(sinceIso)) / 86400000 > 60;
     const byBucket = {};
     firstSeenRows.forEach((r) => {
@@ -243,13 +322,16 @@ window.PageServerStats = (() => {
       byBucket[key] = (byBucket[key] || 0) + 1;
     });
     const labels = Object.keys(byBucket).sort();
+    const values = labels.map((l) => byBucket[l]);
+    let running = 0;
+    const cumulative = values.map((v) => (running += v));
     return {
       labels: labels.map((l) =>
         groupByMonth
           ? new Date(l + "-01").toLocaleDateString("fr-FR", { month: "short", year: "2-digit" })
           : new Date(l).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })
       ),
-      values: labels.map((l) => byBucket[l]),
+      values, cumulative, groupByMonth,
     };
   }
 
@@ -258,173 +340,202 @@ window.PageServerStats = (() => {
     const totalDeaths = players.reduce((s, p) => s + (p.deaths ?? 0), 0);
     const globalRatio = totalDeaths ? totalKills / totalDeaths : totalKills;
     const top = players
-      .filter((p) => p.deaths >= 1 || p.player_kills >= 1)
-      .map((p) => ({ username: p.username, ratio: p.deaths ? p.player_kills / p.deaths : p.player_kills }))
+      .filter((p) => (p.player_kills ?? 0) >= 1)
+      .map((p) => ({ username: p.username, ratio: (p.player_kills ?? 0) / ((p.deaths ?? 0) + 1) }))
       .sort((a, b) => b.ratio - a.ratio)
       .slice(0, 6);
     return { globalRatio, top };
   }
 
+  function retentionBuckets(lastSeenRows) {
+    const now = Date.now();
+    const buckets = { "≤ 7 jours": 0, "8 – 30 jours": 0, "> 30 jours": 0 };
+    lastSeenRows.forEach((r) => {
+      const days = (now - new Date(r.joined_at).getTime()) / 86400000;
+      if (days <= 7) buckets["≤ 7 jours"]++;
+      else if (days <= 30) buckets["8 – 30 jours"]++;
+      else buckets["> 30 jours"]++;
+    });
+    return buckets;
+  }
+
+  // Jour du serveur = ancienneté depuis la toute première connexion jamais
+  // enregistrée. C'est le nouvel élément "signature" de la page : un seul
+  // gros repère narratif tout en haut, plutôt qu'une rangée de cartes KPI.
+  function launchInfo(players) {
+    const dates = players.map((p) => p.first_seen).filter(Boolean).map((d) => new Date(d).getTime());
+    if (!dates.length) return null;
+    const launch = new Date(Math.min(...dates));
+    const days = Math.max(1, Math.floor((Date.now() - launch.getTime()) / 86400000) + 1);
+    return { launch, days };
+  }
+
   // ---------------------------------------------------------------
-  // Construction des graphiques Chart.js
+  // Détail d'une journée — alimente le panneau sous "Tendance sur la
+  // période" quand on clique un point (joueurs actifs) ou une barre
+  // (sessions). isoDay est au format "YYYY-MM-DD".
   // ---------------------------------------------------------------
-  function buildCommunityAreaChart(history) {
-    const canvas = document.getElementById("chart-community-area");
-    const { labels, totals } = communityPlaytimeSeries(history);
-    if (!canvas) return;
-    if (labels.length < 2) {
-      canvas.parentElement.innerHTML = `<p class="text-sm text-muted py-6 text-center">Pas encore assez d'historique sur cette période.</p>`;
-      return;
+  function dayDetailHTML(isoDay, sessions) {
+    const dayLabel = new Date(isoDay + "T00:00:00").toLocaleDateString("fr-FR", {
+      weekday: "long", day: "numeric", month: "long", year: "numeric",
+    });
+    const daySessions = sessions.filter((s) => new Date(s.joined_at).toISOString().slice(0, 10) === isoDay);
+
+    if (!daySessions.length) {
+      return `
+        <p class="text-[11px] font-mono uppercase tracking-wider text-enchant mb-1">${dayLabel}</p>
+        <p class="text-sm text-muted py-4 text-center">Aucune session enregistrée ce jour-là.</p>`;
     }
-    charts.communityArea = new Chart(canvas.getContext("2d"), {
+
+    const byPlayer = {};
+    daySessions.forEach((s) => {
+      if (!byPlayer[s.uuid]) byPlayer[s.uuid] = { username: s.username, seconds: 0, sessions: 0 };
+      byPlayer[s.uuid].seconds += s.session_seconds ?? 0;
+      byPlayer[s.uuid].sessions++;
+    });
+    const rows = Object.values(byPlayer).sort((a, b) => b.seconds - a.seconds);
+    const totalSeconds = rows.reduce((s, r) => s + r.seconds, 0);
+
+    return `
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <p class="text-[11px] font-mono uppercase tracking-wider text-enchant">${dayLabel}</p>
+        <p class="text-[11px] text-muted">${rows.length} joueur(s) · ${daySessions.length} session(s) · ${window.fmt.duration(totalSeconds)} cumulées</p>
+      </div>
+      <div class="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+        ${rows.map((r, i) => `
+          <div class="flex items-center gap-3 px-2.5 py-1.5 rounded ${i === 0 ? "bg-surface2" : ""}">
+            <p class="font-sans text-sm font-semibold text-ink flex-1 truncate">${r.username}</p>
+            <p class="font-mono text-xs text-muted">${r.sessions} session(s)</p>
+            <p class="font-mono text-sm font-bold text-ink w-16 text-right">${window.fmt.duration(r.seconds)}</p>
+          </div>`).join("")}
+      </div>`;
+  }
+
+  function renderDayDetail(isoDay) {
+    const panel = document.getElementById("day-detail-panel");
+    if (!panel) return;
+    selectedDayIso = isoDay;
+    panel.innerHTML = dayDetailHTML(isoDay, currentSessions);
+  }
+
+  function dayDetailPlaceholderHTML() {
+    return `<p class="text-sm text-muted text-center py-6">Clique un point (joueurs actifs) ou une barre (sessions) ci-dessus pour voir le détail d'une journée.</p>`;
+  }
+
+  // ---------------------------------------------------------------
+  // Graphiques Chart.js
+  // ---------------------------------------------------------------
+  function buildPeakHoursChart(sessions) {
+    const canvas = document.getElementById("chart-peak-hours");
+    if (!canvas) return;
+    if (renderEmptyIfNeeded(canvas, sessions.length === 0, "Aucune connexion sur cette période.")) return;
+    const counts = peakHours(sessions);
+    charts.peakHours = new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: counts.map((_, h) => `${h}h`),
+        datasets: [{ data: counts, backgroundColor: CHART_COLORS.enchant, borderRadius: 3 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y} connexion(s)` } } },
+        scales: {
+          x: { ...axisOpts, ticks: { ...axisOpts.ticks, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+          y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } },
+        },
+      },
+    });
+  }
+
+  function buildPeakDaysChart(sessions) {
+    const canvas = document.getElementById("chart-peak-days");
+    if (!canvas) return;
+    if (renderEmptyIfNeeded(canvas, sessions.length === 0, "Aucune connexion sur cette période.")) return;
+    const counts = peakDays(sessions);
+    charts.peakDays = new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: DAY_LABELS,
+        datasets: [{ data: counts, backgroundColor: CHART_COLORS.gold, borderRadius: 3 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y} connexion(s)` } } },
+        scales: { x: axisOpts, y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } } },
+      },
+    });
+  }
+
+  // Interactif : chaque point représente un jour. Clic → détail des
+  // joueurs actifs ce jour-là dans le panneau "day-detail-panel". Le
+  // curseur passe en pointeur au survol d'un point pour signaler que
+  // c'est cliquable.
+  function buildActivePlayersChart(sessions) {
+    const canvas = document.getElementById("chart-active-players");
+    if (!canvas) return;
+    const { labels, counts } = activePlayersPerDay(sessions);
+    if (renderEmptyIfNeeded(canvas, labels.length < 2, "Pas encore assez de connexions sur cette période pour tracer une courbe.")) return;
+    charts.activePlayers = new Chart(canvas.getContext("2d"), {
       type: "line",
       data: {
         labels: labels.map((l) => new Date(l).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })),
         datasets: [{
-          label: "Temps de jeu cumulé (communauté)",
-          data: totals.map((s) => Math.round(s / 3600)),
+          label: "Joueurs uniques",
+          data: counts,
           borderColor: CHART_COLORS.enchant,
           backgroundColor: "rgba(139,108,242,.18)",
-          fill: true,
-          tension: 0.35,
-          pointRadius: 0,
+          fill: true, tension: 0.35, pointRadius: 3, pointHoverRadius: 6,
+          pointBackgroundColor: (ctx) => (labels[ctx.dataIndex] === selectedDayIso ? CHART_COLORS.gold : CHART_COLORS.enchant),
         }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y.toLocaleString("fr-FR")} h cumulées` } } },
-        scales: { x: axisOpts, y: { ...axisOpts, title: { display: true, text: "heures", color: CHART_COLORS.muted } } },
+        onHover: (evt, elements) => { canvas.style.cursor = elements.length ? "pointer" : "default"; },
+        onClick: (evt, elements) => {
+          if (!elements.length) return;
+          renderDayDetail(labels[elements[0].index]);
+        },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y} joueur(s) unique(s) — clique pour le détail` } } },
+        scales: { x: axisOpts, y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } } },
       },
     });
   }
 
+  // Interactif : chaque barre représente un jour. Clic sur une barre (ou
+  // le point de durée moyenne associé) → même panneau de détail que le
+  // graphique "Joueurs actifs par jour", pour explorer une journée sous
+  // les deux angles avec un seul geste.
   function buildComboChart(sessions) {
     const canvas = document.getElementById("chart-combo");
-    const { labels, counts, avgMinutes } = sessionsPerDay(sessions);
     if (!canvas) return;
-    if (labels.length < 2) {
-      canvas.parentElement.innerHTML = `<p class="text-sm text-muted py-6 text-center">Pas encore assez de connexions sur cette période.</p>`;
-      return;
-    }
+    const { labels, counts, avgMinutes } = sessionsPerDay(sessions);
+    if (renderEmptyIfNeeded(canvas, labels.length < 2, "Pas encore assez de sessions sur cette période.")) return;
     charts.combo = new Chart(canvas.getContext("2d"), {
       data: {
         labels: labels.map((l) => new Date(l).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })),
         datasets: [
-          { type: "bar", label: "Connexions", data: counts, backgroundColor: CHART_COLORS.enchant, yAxisID: "y", borderRadius: 4 },
-          { type: "line", label: "Durée moy. session (min)", data: avgMinutes, borderColor: CHART_COLORS.gold, backgroundColor: CHART_COLORS.gold, yAxisID: "y1", tension: 0.35, pointRadius: 2 },
+          {
+            type: "bar", label: "Sessions ouvertes", data: counts, yAxisID: "y", borderRadius: 4,
+            backgroundColor: (ctx) => (labels[ctx.dataIndex] === selectedDayIso ? CHART_COLORS.gold : CHART_COLORS.enchant),
+          },
+          { type: "line", label: "Durée moy. session (min)", data: avgMinutes, borderColor: CHART_COLORS.gold, backgroundColor: CHART_COLORS.gold, yAxisID: "y1", tension: 0.35, pointRadius: 3, pointHoverRadius: 6 },
         ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: CHART_COLORS.muted, font: { size: 11 } } } },
+        onHover: (evt, elements) => { canvas.style.cursor = elements.length ? "pointer" : "default"; },
+        onClick: (evt, elements) => {
+          if (!elements.length) return;
+          renderDayDetail(labels[elements[0].index]);
+        },
+        plugins: {
+          legend: { labels: { color: CHART_COLORS.muted, font: { size: 11 } } },
+          tooltip: { callbacks: { afterBody: () => "Clique pour le détail de cette journée" } },
+        },
         scales: {
           x: axisOpts,
-          y: { ...axisOpts, position: "left", title: { display: true, text: "connexions", color: CHART_COLORS.muted } },
+          y: { ...axisOpts, position: "left", title: { display: true, text: "sessions", color: CHART_COLORS.muted } },
           y1: { ...axisOpts, position: "right", grid: { display: false }, title: { display: true, text: "minutes", color: CHART_COLORS.muted } },
-        },
-      },
-    });
-  }
-
-  function buildTotalsBarCharts(players) {
-    const totals = totalsByCategory(players);
-    const counters = totals.filter((t) => ["deaths", "player_kills", "mob_kills", "jumps", "items_enchanted", "items_dropped"].includes(t.cat.key));
-    const volumes = totals.filter((t) => ["playtime_seconds", "blocks_broken", "blocks_placed", "damage_dealt", "damage_taken"].includes(t.cat.key));
-
-    const c1 = document.getElementById("chart-totals-counters");
-    if (c1) {
-      charts.totalsCounters = new Chart(c1.getContext("2d"), {
-        type: "bar",
-        data: {
-          labels: counters.map((t) => `${t.cat.icon} ${t.cat.short}`),
-          datasets: [{ data: counters.map((t) => t.total), backgroundColor: CHART_COLORS.enchant, borderRadius: 4 }],
-        },
-        options: {
-          indexAxis: "y", responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: { x: axisOpts, y: axisOpts },
-        },
-      });
-    }
-
-    const c2 = document.getElementById("chart-totals-volumes");
-    if (c2) {
-      charts.totalsVolumes = new Chart(c2.getContext("2d"), {
-        type: "bar",
-        data: {
-          labels: volumes.map((t) => `${t.cat.icon} ${t.cat.short}`),
-          datasets: [{ data: volumes.map((t) => t.total), backgroundColor: CHART_COLORS.gold, borderRadius: 4 }],
-        },
-        options: {
-          indexAxis: "y", responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: { x: axisOpts, y: axisOpts },
-        },
-      });
-    }
-  }
-
-  function buildDoughnuts(players) {
-    const pvp = players.reduce((s, p) => s + (p.player_kills ?? 0), 0);
-    const mob = players.reduce((s, p) => s + (p.mob_kills ?? 0), 0);
-    const broken = players.reduce((s, p) => s + (p.blocks_broken ?? 0), 0);
-    const placed = players.reduce((s, p) => s + (p.blocks_placed ?? 0), 0);
-
-    const c1 = document.getElementById("chart-doughnut-kills");
-    if (c1) {
-      charts.doughnutKills = new Chart(c1.getContext("2d"), {
-        type: "doughnut",
-        data: {
-          labels: ["⚔️ Kills PvP", "🗡️ Kills Mobs"],
-          datasets: [{ data: [pvp, mob], backgroundColor: [CHART_COLORS.red, CHART_COLORS.enchant], borderColor: "#121821", borderWidth: 3 }],
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { position: "bottom", labels: { color: CHART_COLORS.muted, font: { size: 11 } } } },
-        },
-      });
-    }
-
-    const c2 = document.getElementById("chart-doughnut-blocks");
-    if (c2) {
-      charts.doughnutBlocks = new Chart(c2.getContext("2d"), {
-        type: "doughnut",
-        data: {
-          labels: ["⛏️ Blocs cassés", "🧱 Blocs posés"],
-          datasets: [{ data: [broken, placed], backgroundColor: [CHART_COLORS.bronze, CHART_COLORS.green], borderColor: "#121821", borderWidth: 3 }],
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { position: "bottom", labels: { color: CHART_COLORS.muted, font: { size: 11 } } } },
-        },
-      });
-    }
-  }
-
-  function buildRadar(players) {
-    const canvas = document.getElementById("chart-radar");
-    if (!canvas) return;
-    const { labels, avgData, topData } = radarProfile(players);
-    charts.radar = new Chart(canvas.getContext("2d"), {
-      type: "radar",
-      data: {
-        labels,
-        datasets: [
-          { label: "Record du serveur", data: topData, borderColor: CHART_COLORS.gold, backgroundColor: "rgba(242,179,61,.08)", pointRadius: 2 },
-          { label: "Moyenne des joueurs", data: avgData, borderColor: CHART_COLORS.enchant, backgroundColor: "rgba(139,108,242,.25)", pointRadius: 2 },
-        ],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: "bottom", labels: { color: CHART_COLORS.muted, font: { size: 11 } } } },
-        scales: {
-          r: {
-            angleLines: { color: CHART_COLORS.grid },
-            grid: { color: CHART_COLORS.grid },
-            pointLabels: { color: CHART_COLORS.muted, font: { size: 10, family: "JetBrains Mono" } },
-            ticks: { display: false, backdropColor: "transparent" },
-            suggestedMin: 0, suggestedMax: 100,
-          },
         },
       },
     });
@@ -433,16 +544,13 @@ window.PageServerStats = (() => {
   function buildSessionHistogram(sessions) {
     const canvas = document.getElementById("chart-session-hist");
     if (!canvas) return;
-    const counts = sessionDurationHistogram(sessions);
-    if (counts.every((c) => c === 0)) {
-      canvas.parentElement.innerHTML = `<p class="text-sm text-muted py-6 text-center">Pas encore de sessions terminées sur cette période.</p>`;
-      return;
-    }
+    const { counts, finishedCount } = sessionDurationHistogram(sessions);
+    if (renderEmptyIfNeeded(canvas, finishedCount === 0, "Aucune session terminée sur cette période (les parties en cours ne comptent pas encore).")) return;
     charts.sessionHist = new Chart(canvas.getContext("2d"), {
       type: "bar",
       data: {
         labels: DURATION_BUCKETS.map((b) => b.label),
-        datasets: [{ data: counts, backgroundColor: CHART_COLORS.green, borderRadius: 4 }],
+        datasets: [{ data: counts, backgroundColor: CHART_COLORS.enchant, borderRadius: 4 }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
@@ -455,41 +563,158 @@ window.PageServerStats = (() => {
   function buildNewPlayersChart(firstSeenRows, sinceIso) {
     const canvas = document.getElementById("chart-new-players");
     if (!canvas) return;
-    const { labels, values } = newPlayersPerBucket(firstSeenRows, sinceIso);
-    if (labels.length < 1) {
-      canvas.parentElement.innerHTML = `<p class="text-sm text-muted py-6 text-center">Aucun nouveau joueur sur cette période.</p>`;
-      return;
-    }
+    const { labels, values, cumulative } = newPlayersPerBucket(firstSeenRows, sinceIso);
+    if (renderEmptyIfNeeded(canvas, labels.length < 1, "Aucun nouveau joueur sur cette période.")) return;
     charts.newPlayers = new Chart(canvas.getContext("2d"), {
-      type: "bar",
-      data: { labels, datasets: [{ data: values, backgroundColor: CHART_COLORS.silver, borderRadius: 4 }] },
+      data: {
+        labels,
+        datasets: [
+          { type: "bar", label: "Nouveaux joueurs", data: values, backgroundColor: CHART_COLORS.green, yAxisID: "y", borderRadius: 4 },
+          { type: "line", label: "Total cumulé", data: cumulative, borderColor: CHART_COLORS.gold, backgroundColor: CHART_COLORS.gold, yAxisID: "y1", tension: 0.35, pointRadius: 2 },
+        ],
+      },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { x: axisOpts, y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } } },
+        plugins: { legend: { labels: { color: CHART_COLORS.muted, font: { size: 11 } } } },
+        scales: {
+          x: axisOpts,
+          y: { ...axisOpts, position: "left", ticks: { ...axisOpts.ticks, precision: 0 } },
+          y1: { ...axisOpts, position: "right", grid: { display: false }, ticks: { ...axisOpts.ticks, precision: 0 } },
+        },
       },
     });
   }
 
-  function buildKdChart(players) {
-    const canvas = document.getElementById("chart-kd");
+  function buildRetentionChart(lastSeenRows) {
+    const canvas = document.getElementById("chart-retention");
     if (!canvas) return;
-    const { top } = kdData(players);
-    if (!top.length) {
-      canvas.parentElement.innerHTML = `<p class="text-sm text-muted py-6 text-center">Pas assez de données pour un classement K/D.</p>`;
-      return;
-    }
-    charts.kd = new Chart(canvas.getContext("2d"), {
+    if (renderEmptyIfNeeded(canvas, lastSeenRows.length === 0, "Aucune connexion enregistrée pour l'instant.")) return;
+    const buckets = retentionBuckets(lastSeenRows);
+    charts.retention = new Chart(canvas.getContext("2d"), {
       type: "bar",
       data: {
-        labels: top.map((t) => t.username),
-        datasets: [{ data: top.map((t) => Math.round(t.ratio * 100) / 100), backgroundColor: CHART_COLORS.red, borderRadius: 4 }],
+        labels: Object.keys(buckets),
+        datasets: [{ data: Object.values(buckets), backgroundColor: [CHART_COLORS.green, CHART_COLORS.gold, CHART_COLORS.red], borderRadius: 4 }],
       },
       options: {
         indexAxis: "y", responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
-        scales: { x: axisOpts, y: axisOpts },
+        scales: { x: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } }, y: axisOpts },
       },
+    });
+  }
+
+  // Radar, mais avec deux ajouts pour lever l'ambiguïté du "100%" : un
+  // tooltip qui donne la valeur exacte (pas juste le %) au survol de chaque
+  // sommet, et une légende à côté qui étale moyenne / record / détenteur du
+  // record pour chaque statistique, plutôt qu'un simple pourcentage nu.
+  function buildRadar(players) {
+    const canvas = document.getElementById("chart-radar");
+    if (!canvas) return;
+    if (renderEmptyIfNeeded(canvas, players.length === 0, "Aucun joueur tracké pour l'instant.")) return;
+    const rows = serverProfileRows(players);
+    charts.radar = new Chart(canvas.getContext("2d"), {
+      type: "radar",
+      data: {
+        labels: rows.map((r) => `${r.icon} ${r.label}`),
+        datasets: [{
+          label: "Moyenne des joueurs",
+          data: rows.map((r) => r.pct),
+          borderColor: CHART_COLORS.enchant,
+          backgroundColor: "rgba(139,108,242,.25)",
+          pointRadius: 3,
+          pointBackgroundColor: CHART_COLORS.enchant,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const row = rows[ctx.dataIndex];
+                const avgFmt = window.fmt.statValue(row.key, Math.round(row.avg));
+                const maxFmt = window.fmt.statValue(row.key, row.max);
+                return [`${row.pct}% du record`, `Moyenne : ${avgFmt}`, `Record : ${maxFmt}${row.holderName ? ` (${row.holderName})` : ""}`];
+              },
+            },
+          },
+        },
+        scales: { r: {
+          angleLines: { color: CHART_COLORS.grid }, grid: { color: CHART_COLORS.grid },
+          pointLabels: { color: CHART_COLORS.muted, font: { size: 10, family: "JetBrains Mono" } },
+          ticks: { display: false, backdropColor: "transparent" }, min: 0, max: 100,
+        } },
+      },
+    });
+    const legendEl = document.getElementById("radar-legend");
+    if (legendEl) {
+      legendEl.innerHTML = rows.map((row) => {
+        const avgFmt = window.fmt.statValue(row.key, Math.round(row.avg));
+        const maxFmt = window.fmt.statValue(row.key, row.max);
+        return `
+          <div class="flex flex-col gap-0.5 text-xs font-mono px-2.5 py-2 rounded bg-surface2">
+            <div class="flex items-center justify-between">
+              <span class="text-muted">${row.icon} ${row.label}</span>
+              <span class="text-ink font-bold">${row.pct}%</span>
+            </div>
+            <span class="text-muted/70 text-[10px]">${avgFmt} / ${maxFmt}${row.holderName ? ` (${row.holderName})` : ""}</span>
+          </div>`;
+      }).join("");
+    }
+  }
+
+  // Classement K/D en liste (pas en bar chart) : chaque ligne porte son
+  // rang avec la même palette médaille que la page Podium (rank-badge
+  // r1/r2/r3), pour que ce top se lise comme un vrai podium plutôt que
+  // comme un énième graphique en barres.
+  function kdListHTML(top) {
+    if (!top.length) return emptyStateHTML("Pas encore assez de kills pour établir un classement K/D.");
+    const maxRatio = Math.max(...top.map((t) => t.ratio));
+    return `<div class="space-y-2">` + top.map((t, i) => `
+      <div class="flex items-center gap-3 p-2 rounded-lg ${i < 3 ? "bg-surface2" : ""}">
+        <div class="rank-badge ${i === 0 ? "r1" : i === 1 ? "r2" : i === 2 ? "r3" : ""} shrink-0 w-7 h-7 flex items-center justify-center text-xs font-mono font-bold rounded-full border border-border">${i + 1}</div>
+        <p class="font-sans text-sm font-semibold text-ink w-24 sm:w-32 truncate">${t.username}</p>
+        <div class="flex-1 h-2 rounded-full bg-surface2 overflow-hidden">
+          <div class="h-full rounded-full" style="width:${Math.max(4, (t.ratio / maxRatio) * 100).toFixed(0)}%; background:${i < 3 ? MEDAL_COLORS[i] : CHART_COLORS.enchant}"></div>
+        </div>
+        <p class="font-mono text-sm font-bold text-ink w-12 text-right">${(Math.round(t.ratio * 100) / 100).toLocaleString("fr-FR")}</p>
+      </div>`).join("") + `</div>`;
+  }
+
+  // ---------------------------------------------------------------
+  // Sous-nav collante + scrollspy
+  // ---------------------------------------------------------------
+  function subNavHTML() {
+    const links = SECTIONS.map(
+      (s) => `<a href="#${s.id}" data-section="${s.id}" class="subnav-link shrink-0 px-3 py-1.5 rounded-full text-[11px] font-mono border border-border text-muted hover:text-ink hover:border-enchant transition-colors">${s.label}</a>`
+    ).join("");
+    return `<nav id="stats-subnav" class="sticky top-0 z-20 -mx-4 sm:-mx-6 md:-mx-10 px-4 sm:px-6 md:px-10 py-2 mb-6 bg-bg/95 backdrop-blur border-b border-border flex gap-2 overflow-x-auto">${links}</nav>`;
+  }
+
+  function bindSubNav() {
+    const nav = document.getElementById("stats-subnav");
+    if (!nav) return;
+    nav.addEventListener("click", (e) => {
+      const a = e.target.closest("a[data-section]");
+      if (!a) return;
+      e.preventDefault();
+      document.getElementById(a.dataset.section)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    sectionObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          nav.querySelectorAll("a[data-section]").forEach((l) => l.classList.remove("bg-surface2", "text-ink", "border-enchant"));
+          nav.querySelector(`a[data-section="${entry.target.id}"]`)?.classList.add("bg-surface2", "text-ink", "border-enchant");
+        });
+      },
+      { rootMargin: "-100px 0px -70% 0px", threshold: 0 }
+    );
+    SECTIONS.forEach((s) => {
+      const el = document.getElementById(s.id);
+      if (el) sectionObserver.observe(el);
     });
   }
 
@@ -500,102 +725,166 @@ window.PageServerStats = (() => {
     const contentWrap = document.getElementById("stats-content");
     contentWrap.innerHTML = window.skeletonRows(4, "h-24");
     destroyCharts();
+    selectedDayIso = null;
 
     try {
       const sinceIso = periodStartDate(activePeriod);
-      const [players, sessions, history, firstSeenRows] = await Promise.all([
+      const prevRange = previousPeriodRange(activePeriod);
+      const hasPrev = !!prevRange;
+
+      const [players, sessions, firstSeenRows, lastSeenRows, prevSessions, prevFirstSeenRows] = await Promise.all([
         fetchPlayers(),
         fetchSessions(sinceIso),
-        fetchHistorySince(sinceIso),
         fetchFirstSeen(sinceIso),
+        fetchLastSeen(),
+        hasPrev ? fetchSessions(prevRange.sinceIso, prevRange.untilIso) : Promise.resolve([]),
+        hasPrev ? fetchFirstSeen(prevRange.sinceIso, prevRange.untilIso) : Promise.resolve([]),
       ]);
+
+      currentSessions = sessions;
 
       const totalPlayers = players.length;
       const totalDistance = players.reduce((sum, p) => sum + (p.distance_meters ?? 0), 0);
-      const totalPlaytime = players.reduce((sum, p) => sum + (p.playtime_seconds ?? 0), 0);
-      const totalDeaths = players.reduce((sum, p) => sum + (p.deaths ?? 0), 0);
-      const avgPlaytime = totalPlayers ? totalPlaytime / totalPlayers : 0;
-      const avgDeaths = totalPlayers ? totalDeaths / totalPlayers : 0;
+      const totalPlaytimeAllTime = players.reduce((sum, p) => sum + (p.playtime_seconds ?? 0), 0);
       const laps = totalDistance / EARTH_CIRCUMFERENCE_M;
+      const launch = launchInfo(players);
+
       const uniqueConnected = new Set(sessions.map((s) => s.uuid)).size;
+      const totalSessionSeconds = sessions.reduce((s, x) => s + (x.session_seconds ?? 0), 0);
+      const avgPlaytimeInPeriod = uniqueConnected ? totalSessionSeconds / uniqueConnected : 0;
+      const avgSessionsPerPlayer = uniqueConnected ? sessions.length / uniqueConnected : 0;
+
+      const prevUniqueConnected = hasPrev ? new Set(prevSessions.map((s) => s.uuid)).size : 0;
+      const prevTotalSessionSeconds = hasPrev ? prevSessions.reduce((s, x) => s + (x.session_seconds ?? 0), 0) : 0;
+      const prevAvgPlaytime = prevUniqueConnected ? prevTotalSessionSeconds / prevUniqueConnected : 0;
+      const prevAvgSessions = prevUniqueConnected ? prevSessions.length / prevUniqueConnected : 0;
+      const prevNewPlayers = hasPrev ? prevFirstSeenRows.length : 0;
+
+      const { groupByMonth } = newPlayersPerBucket(firstSeenRows, sinceIso);
+      const { globalRatio, top } = kdData(players);
+      const records = recordCategories(players);
 
       contentWrap.innerHTML = `
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
-          ${statCard("👥", "Joueurs trackés", window.fmt.int(totalPlayers))}
-          ${statCard("🔌", "Connexions (période)", window.fmt.int(uniqueConnected) + " joueur(s)")}
-          ${statCard("⏱️", "Temps de jeu moyen", window.fmt.duration(avgPlaytime))}
-          ${statCard("💀", "Morts moyennes / joueur", window.fmt.int(avgDeaths))}
+        <!-- HERO — élément signature de la page : un seul repère narratif
+             ("Jour N depuis la 1ère connexion") plutôt qu'une rangée de
+             cartes KPI. Purement all-time, ne dépend jamais du sélecteur
+             de période plus bas : la distinction que le rapport pointait
+             comme mélangée est ici une séparation physique, pas juste un
+             badge. -->
+        <div class="card p-8 md:p-10 mb-4 text-center" style="background:linear-gradient(180deg, rgba(139,108,242,.08), transparent)">
+          <p class="text-[11px] font-mono uppercase tracking-widest text-muted mb-2">${window.APP_CONFIG.SERVER_NAME}${periodBadge("alltime")}</p>
+          ${launch ? `
+            <p class="font-mono font-extrabold text-5xl md:text-6xl text-ink">Jour ${window.fmt.int(launch.days)}</p>
+            <p class="text-sm text-muted mt-2">depuis la toute première connexion enregistrée, le ${launch.launch.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}</p>
+          ` : `<p class="font-mono font-extrabold text-3xl text-ink">Pas encore de données</p>`}
+          <div class="flex flex-wrap justify-center gap-x-8 gap-y-3 mt-6 pt-6 border-t border-border">
+            <div><p class="font-mono font-bold text-xl text-ink">${window.fmt.int(totalPlayers)}</p><p class="text-[11px] text-muted">joueurs trackés</p></div>
+            <div><p class="font-mono font-bold text-xl text-ink">${window.fmt.duration(totalPlaytimeAllTime)}</p><p class="text-[11px] text-muted">jouées cumulées</p></div>
+            <div><p class="font-mono font-bold text-xl text-gold">${window.fmt.distance(totalDistance)}</p><p class="text-[11px] text-muted">soit ${laps.toLocaleString("fr-FR", { maximumFractionDigits: 2 })}× le tour de la Terre 🌍</p></div>
+          </div>
         </div>
 
-        <div class="card p-6 mb-8 text-center">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-2">🌍 Compteur global de la communauté</p>
-          <p class="font-mono font-extrabold text-3xl text-gold">${window.fmt.distance(totalDistance)}</p>
-          <p class="text-sm text-muted mt-1">
-            soit environ <span class="text-ink font-semibold">${laps.toLocaleString("fr-FR", { maximumFractionDigits: 2 })}×</span> le tour de la Terre 🌐
-          </p>
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+          <p class="text-xs text-muted">Le reste de la page suit la période choisie ci-dessous, sauf mention "All-time".</p>
+          <div class="flex flex-wrap gap-2" id="period-nav">${periodNavHTML()}</div>
         </div>
 
-        <section class="mb-8">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🔥 Heures de pointe</p>
-          <div class="card p-4">${heatmapHTML(buildHeatmapMatrix(sessions))}</div>
+        ${subNavHTML()}
+
+        <section id="sec-pouls" class="mb-10 scroll-mt-20">
+          ${sectionTitle("💓", "Pouls de la communauté", "period")}
+
+          ${subHeading("En bref")}
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            ${statCard("✨", "Nouveaux joueurs", window.fmt.int(firstSeenRows.length), trendSub(deltaPct(firstSeenRows.length, prevNewPlayers, hasPrev), { fallback: `<span class="text-muted">depuis toujours</span>` }))}
+            ${statCard("🔌", "Joueurs connectés (uniques)", window.fmt.int(uniqueConnected), trendSub(deltaPct(uniqueConnected, prevUniqueConnected, hasPrev)))}
+            ${statCard("⏱️", "Temps de jeu moyen / joueur", window.fmt.duration(avgPlaytimeInPeriod), trendSub(deltaPct(avgPlaytimeInPeriod, prevAvgPlaytime, hasPrev)))}
+            ${statCard("🔁", "Sessions moy. / joueur", avgSessionsPerPlayer.toLocaleString("fr-FR", { maximumFractionDigits: 1 }), trendSub(deltaPct(avgSessionsPerPlayer, prevAvgSessions, hasPrev)))}
+          </div>
+
+          ${subHeading("Quand est-ce que ça joue ?")}
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            ${chartCard("chart-peak-hours", "Connexions par heure de la journée", "Toutes les connexions de la période, cumulées par heure (0h–23h).", 200)}
+            ${chartCard("chart-peak-days", "Connexions par jour de la semaine", "Toutes les connexions de la période, cumulées par jour.", 200)}
+          </div>
+
+          ${subHeading("Tendance sur la période")}
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            ${chartCard("chart-active-players", "Joueurs actifs par jour", "Joueurs uniques connectés au moins une fois ce jour-là. Clique un point pour le détail.")}
+            ${chartCard("chart-combo", "Sessions & durée moyenne", "Nombre de sessions ouvertes par jour — un même joueur peut se reconnecter plusieurs fois. Clique une barre pour le détail.")}
+          </div>
+          <div class="card p-4 mt-4" id="day-detail-panel">${dayDetailPlaceholderHTML()}</div>
         </section>
 
-        <section class="mb-8">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">📈 Activité de la communauté</p>
+        <section id="sec-joueurs" class="mb-10 scroll-mt-20">
+          ${sectionTitle("🧑‍🤝‍🧑", "Joueurs", "period")}
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            ${chartCard("chart-community-area", "Temps de jeu cumulé (aire)")}
-            ${chartCard("chart-combo", "Connexions & durée moyenne (combo barres + courbe)")}
+            ${chartCard("chart-new-players", "Nouveaux joueurs & croissance cumulée", `Regroupé par ${groupByMonth ? "mois" : "jour"} sur cette période.`, 240)}
+            ${chartCard("chart-session-hist", "Répartition des durées de session", "Sessions terminées uniquement — les parties en cours ne sont pas encore comptabilisées.", 240)}
           </div>
         </section>
-
-        <section class="mb-8">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🧑‍🤝‍🧑 Joueurs</p>
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            ${chartCard("chart-new-players", "Nouveaux joueurs sur la période", 240)}
-            ${chartCard("chart-session-hist", "Répartition des durées de session", 240)}
-          </div>
+        <section id="sec-joueurs" class="mb-10 scroll-mt-20">
+          ${sectionTitle("🟢", "Statut des joueurs", "alltime", "Basé sur la dernière connexion de chaque joueur, tous historiques confondus — indépendant de la période choisie plus haut.")}
+          ${chartCard("chart-retention", "Ancienneté depuis la dernière connexion", "", 170)}
         </section>
 
-        <section class="mb-8">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">⚔️ Ratio Kills / Morts</p>
+        <section id="sec-combat" class="mb-10 scroll-mt-20">
+          ${sectionTitle("⚔️", "Combat", "alltime")}
           <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="card p-5 flex flex-col justify-center">
-              <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-2">Ratio K/D global du serveur</p>
-              <p class="font-mono font-extrabold text-3xl text-red">${(kdData(players).globalRatio).toLocaleString("fr-FR", { maximumFractionDigits: 2 })}</p>
+            <div class="card p-5 flex flex-col justify-center gap-1 text-center lg:text-left">
+              <p class="text-[11px] font-mono uppercase tracking-wider text-muted">Ratio K/D global du serveur</p>
+              <p class="font-mono font-extrabold text-4xl text-gold">${globalRatio.toLocaleString("fr-FR", { maximumFractionDigits: 2 })}</p>
+              <p class="text-xs text-muted mt-1">Total des kills PvP sur total des morts, tous joueurs confondus.</p>
             </div>
-            <div class="lg:col-span-2">${chartCard("chart-kd", "Top 6 meilleurs ratios K/D individuels", 240)}</div>
+            <div class="lg:col-span-2 card p-4">
+              <p class="text-[11px] font-mono uppercase tracking-wider text-muted">Top 6 meilleurs ratios K/D individuels</p>
+              <p class="text-[11px] text-muted/70 mb-3">Calculé en kills / (morts + 1) pour rester défini même à 0 mort.</p>
+              ${kdListHTML(top)}
+            </div>
           </div>
         </section>
 
-        <section class="mb-8">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🧮 Totaux cumulés (toutes périodes)</p>
+        <section id="sec-records" class="mb-10 scroll-mt-20">
+          ${sectionTitle("🏅", "Records cumulés", "alltime", "Somme de la statistique sur tous les joueurs trackés, depuis toujours.")}
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+            ${records.map((r) => {
+              const isPlaytime = r.cat.key === "playtime_seconds" || r.cat.key === "playtime";
+              const val = isPlaytime 
+                ? `${window.fmt.int(Math.round(r.total / 3600))} h` 
+                : window.fmt.int(r.total);
+              return recordTile(r.cat.icon, r.cat.short, val);
+            }).join("")}
+          </div>
+        </section>
+
+        <section id="sec-profil" class="scroll-mt-20">
+          ${sectionTitle("🕸️", "Profil du serveur", "alltime", "Chaque axe est indépendant : 100% = le record actuel du serveur pour CETTE statistique précise, pas un maximum commun à tous les axes. Survole un point ou regarde la légende pour les valeurs exactes.")}
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            ${chartCard("chart-totals-counters", "Compteurs (kills, morts, sauts…)", 260)}
-            ${chartCard("chart-totals-volumes", "Volumes (temps, blocs, dégâts…)", 260)}
+            ${chartCard("chart-radar", "Profil moyen (toile)", "", 320)}
+            <div class="card p-4">
+              <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-1">Détail par statistique</p>
+              <p class="text-[11px] text-muted/70 mb-3">Moyenne des joueurs / record du serveur (détenteur du record entre parenthèses).</p>
+              <div id="radar-legend" class="grid grid-cols-2 gap-2"></div>
+            </div>
           </div>
-        </section>
-
-        <section class="mb-8">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🥧 Répartitions</p>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            ${chartCard("chart-doughnut-kills", "Kills : PvP vs Mobs", 240)}
-            ${chartCard("chart-doughnut-blocks", "Blocs : cassés vs posés", 240)}
-          </div>
-        </section>
-
-        <section>
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕸️ Profil du serveur (toile)</p>
-          ${chartCard("chart-radar", "Moyenne des joueurs vs record du serveur (normalisé)", 320)}
         </section>
       `;
 
-      buildCommunityAreaChart(history);
+      document.getElementById("period-nav").addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-period]");
+        if (!btn) return;
+        activePeriod = btn.dataset.period;
+        loadPeriodData();
+      });
+
+      bindSubNav();
+      buildPeakHoursChart(sessions);
+      buildPeakDaysChart(sessions);
+      buildActivePlayersChart(sessions);
       buildComboChart(sessions);
       buildNewPlayersChart(firstSeenRows, sinceIso);
       buildSessionHistogram(sessions);
-      buildKdChart(players);
-      buildTotalsBarCharts(players);
-      buildDoughnuts(players);
+      buildRetentionChart(lastSeenRows);
       buildRadar(players);
     } catch (e) {
       console.error(e);
@@ -608,26 +897,14 @@ window.PageServerStats = (() => {
     root.innerHTML = `
       <header class="mb-7">
         <h1 class="text-2xl font-extrabold tracking-tight">Serveur Stats</h1>
-        <p class="text-muted text-sm mt-1">Vue d'ensemble de l'activité de ${window.APP_CONFIG.SERVER_NAME}.</p>
+        <p class="text-muted text-sm mt-1">Vue d'ensemble de l'activité de ${window.APP_CONFIG.SERVER_NAME}</p>
       </header>
-      <div class="flex flex-wrap gap-2 mb-6" id="period-nav">${periodNavHTML()}</div>
       <div id="stats-content">${window.skeletonRows(4, "h-24")}</div>
     `;
   }
 
-  function bindEvents() {
-    document.getElementById("period-nav").addEventListener("click", (e) => {
-      const btn = e.target.closest("button[data-period]");
-      if (!btn) return;
-      activePeriod = btn.dataset.period;
-      document.getElementById("period-nav").innerHTML = periodNavHTML();
-      loadPeriodData();
-    });
-  }
-
   async function render() {
     renderAll();
-    bindEvents();
     await loadPeriodData();
     return () => destroyCharts();
   }
