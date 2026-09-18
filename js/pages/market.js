@@ -12,19 +12,20 @@ window.PageMarket = (() => {
   };
   const MEDAL_COLORS = [CHART_COLORS.gold, CHART_COLORS.silver, CHART_COLORS.bronze];
 
-  // Monnaies possibles côté mod (CurrencyType). Libellé + icône pour l'affichage uniquement —
-  // la valeur envoyée à Supabase reste la clé brute (colonne `currency`).
+  // Monnaies possibles côté mod (CurrencyType). `texture` = nom du fichier dans
+  // minecraft-assets (textures/item/) pour afficher la vraie icône plutôt qu'un emoji
+  // approximatif ; `icon` reste comme repli si jamais l'image ne charge pas.
   const CURRENCIES = [
-    { key: "DIAMOND", label: "Diamant", icon: "💎" },
-    { key: "EMERALD", label: "Émeraude", icon: "🟢" },
-    { key: "GOLD_INGOT", label: "Lingot d'or", icon: "🟡" },
-    { key: "IRON_INGOT", label: "Lingot de fer", icon: "⚪" },
-    { key: "AMETHYST_SHARD", label: "Éclat d'améthyste", icon: "🔮" },
-    { key: "NETHERITE_INGOT", label: "Lingot de netherite", icon: "⬛" },
-    { key: "GOLDEN_APPLE", label: "Pomme dorée", icon: "🍎" },
-    { key: "ENCHANTED_GOLDEN_APPLE", label: "Pomme dorée enchantée", icon: "✨" },
+    { key: "DIAMOND", label: "Diamant", icon: "💎", texture: "diamond" },
+    { key: "EMERALD", label: "Émeraude", icon: "🟢", texture: "emerald" },
+    { key: "GOLD_INGOT", label: "Lingot d'or", icon: "🟡", texture: "gold_ingot" },
+    { key: "IRON_INGOT", label: "Lingot de fer", icon: "⚪", texture: "iron_ingot" },
+    { key: "AMETHYST_SHARD", label: "Éclat d'améthyste", icon: "🔮", texture: "amethyst_shard" },
+    { key: "NETHERITE_INGOT", label: "Lingot de netherite", icon: "⬛", texture: "netherite_ingot" },
+    { key: "GOLDEN_APPLE", label: "Pomme dorée", icon: "🍎", texture: "golden_apple" },
+    { key: "ENCHANTED_GOLDEN_APPLE", label: "Pomme dorée enchantée", icon: "✨", texture: "enchanted_golden_apple" },
   ];
-  const currencyInfo = (key) => CURRENCIES.find((c) => c.key === key) || { key, label: key, icon: "🔸" };
+  const currencyInfo = (key) => CURRENCIES.find((c) => c.key === key) || { key, label: key, icon: "🔸", texture: null };
 
   const PRICE_PERIODS = [
     { key: "month", label: "30 jours", days: 30 },
@@ -32,22 +33,39 @@ window.PageMarket = (() => {
     { key: "all", label: "Tout", days: null },
   ];
 
-  const SECTIONS = [
-    { id: "sec-pouls", label: "Pouls" },
-    { id: "sec-cours", label: "Cours" },
-    { id: "sec-annonces", label: "Annonces" },
-    { id: "sec-classements", label: "Classements" },
-    { id: "sec-activite", label: "Activité" },
-  ];
+  const SHOP_PAGE_SIZE = 12;
 
   let charts = {};
-  let sectionObserver = null;
   let refreshTimer = null;
 
   let selectedItemId = null;
   let selectedCurrency = "DIAMOND";
   let pricePeriod = "month";
   let itemOptions = []; // [{item_id, item_name}]
+
+  let allActiveListings = []; // toute la boutique, gardée en mémoire pour la pagination côté client
+  let shopPage = 1;
+
+  // Texture d'un item, tirée du dépôt public InventivetalentDev/minecraft-assets (miroir des
+  // assets vanilla par version). Ne couvre que les items "à icône" — les blocs affichés comme
+  // item (ex: minecraft:diamond_block) n'ont pas toujours ce chemin et retombent sur le fallback.
+  function textureUrl(name) {
+    return `https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.1/assets/minecraft/textures/item/${name}.png`;
+  }
+
+  function itemImageUrl(itemId) {
+    if (!itemId) return "";
+    const name = itemId.includes(":") ? itemId.split(":")[1] : itemId;
+    return textureUrl(name);
+  }
+
+  // Petite icône inline pour une monnaie (16px par défaut) — vraie texture Minecraft,
+  // avec repli automatique sur l'emoji si jamais l'image ne charge pas.
+  function currencyIconHTML(key, size = 16) {
+    const c = currencyInfo(key);
+    if (!c.texture) return c.icon;
+    return `<img src="${textureUrl(c.texture)}" alt="${c.label}" title="${c.label}" width="${size}" height="${size}" class="inline-block align-[-3px] [image-rendering:pixelated]" onerror="this.onerror=null;this.replaceWith(document.createTextNode('${c.icon}'))" />`;
+  }
 
   // ---------------------------------------------------------------
   // Fetch
@@ -211,21 +229,52 @@ window.PageMarket = (() => {
       </div>`).join("") + `</div>`;
   }
 
-  function listingRowHTML(l) {
-    const cur = currencyInfo(l.currency);
+  // Carte boutique : image de l'item, nom, prix, vendeur, date de mise en vente.
+  function shopCardHTML(l) {
     return `
-      <div class="flex items-center gap-3 p-2.5 rounded-lg bg-surface2">
-        <img src="${window.avatarHead(l.seller_uuid, 32)}" class="w-8 h-8 rounded shrink-0" alt="" />
-        <div class="min-w-0 flex-1">
-          <p class="font-sans text-sm font-semibold text-ink truncate">${l.item_name ?? l.item_id}${l.item_count > 1 ? ` ×${l.item_count}` : ""}</p>
-          <p class="text-[11px] text-muted truncate">par ${l.seller_name} · ${window.fmt.timeAgo(l.listed_at)}</p>
+      <div class="card p-3 flex flex-col gap-2">
+        <div class="w-full aspect-square rounded-lg bg-surface2 flex items-center justify-center overflow-hidden">
+          <img src="${itemImageUrl(l.item_id)}" alt="${l.item_name ?? l.item_id}"
+               class="w-3/5 h-3/5 object-contain [image-rendering:pixelated]"
+               onerror="this.onerror=null;this.replaceWith(Object.assign(document.createElement('span'),{textContent:'📦',className:'text-3xl'}))" />
         </div>
-        <p class="font-mono text-sm font-bold text-ink whitespace-nowrap shrink-0">${window.fmt.int(l.price)} ${cur.icon}</p>
+        <div class="min-w-0">
+          <p class="font-sans text-sm font-semibold text-ink truncate" title="${l.item_name ?? l.item_id}">${l.item_name ?? l.item_id}${l.item_count > 1 ? ` ×${l.item_count}` : ""}</p>
+          <p class="font-mono text-base font-extrabold text-ink mt-0.5">${window.fmt.int(l.price)} ${currencyIconHTML(l.currency)}</p>
+        </div>
+        <div class="flex items-center gap-2 pt-2 border-t border-border">
+          <img src="${window.avatarHead(l.seller_uuid, 24)}" class="w-6 h-6 rounded shrink-0" alt="" />
+          <div class="min-w-0 flex-1">
+            <p class="text-[11px] text-ink truncate">${l.seller_name}</p>
+            <p class="text-[10px] text-muted">${window.fmt.timeAgo(l.listed_at)}</p>
+          </div>
+        </div>
       </div>`;
   }
 
+  function shopPaginationHTML(page, totalPages) {
+    if (totalPages <= 1) return "";
+    return `
+      <div class="flex items-center justify-center gap-3 mt-4">
+        <button data-shop-page="${page - 1}" class="chip-btn" ${page <= 1 ? "disabled" : ""}>← Précédent</button>
+        <p class="text-xs font-mono text-muted">Page ${page} / ${totalPages}</p>
+        <button data-shop-page="${page + 1}" class="chip-btn" ${page >= totalPages ? "disabled" : ""}>Suivant →</button>
+      </div>`;
+  }
+
+  function renderShopPage() {
+    const grid = document.getElementById("market-shop-grid");
+    const pag = document.getElementById("market-shop-pagination");
+    if (!grid) return;
+    const totalPages = Math.max(1, Math.ceil(allActiveListings.length / SHOP_PAGE_SIZE));
+    shopPage = Math.min(Math.max(1, shopPage), totalPages);
+    const start = (shopPage - 1) * SHOP_PAGE_SIZE;
+    const pageItems = allActiveListings.slice(start, start + SHOP_PAGE_SIZE);
+    grid.innerHTML = pageItems.map(shopCardHTML).join("") || emptyStateHTML("Aucune annonce active pour le moment.");
+    if (pag) pag.innerHTML = shopPaginationHTML(shopPage, totalPages);
+  }
+
   function transactionRowHTML(t) {
-    const cur = currencyInfo(t.currency);
     return `
       <div class="flex items-center gap-3 p-2.5 rounded-lg bg-surface2">
         <img src="${window.avatarHead(t.buyer_uuid, 32)}" class="w-8 h-8 rounded shrink-0" alt="" />
@@ -237,43 +286,8 @@ window.PageMarket = (() => {
           </p>
           <p class="text-[11px] text-muted">${window.fmt.timeAgo(t.sold_at)}</p>
         </div>
-        <p class="font-mono text-sm font-bold text-gold whitespace-nowrap shrink-0">${window.fmt.int(t.price)} ${cur.icon}</p>
+        <p class="font-mono text-sm font-bold text-gold whitespace-nowrap shrink-0">${window.fmt.int(t.price)} ${currencyIconHTML(t.currency)}</p>
       </div>`;
-  }
-
-  // ---------------------------------------------------------------
-  // Sous-nav collante + scrollspy (identique à serverStats.js)
-  // ---------------------------------------------------------------
-  function subNavHTML() {
-    const links = SECTIONS.map(
-      (s) => `<a href="#${s.id}" data-section="${s.id}" class="subnav-link shrink-0 px-3 py-1.5 rounded-full text-[11px] font-mono border border-border text-muted hover:text-ink hover:border-enchant transition-colors">${s.label}</a>`
-    ).join("");
-    return `<nav id="market-subnav" class="sticky top-0 z-20 -mx-4 sm:-mx-6 md:-mx-10 px-4 sm:px-6 md:px-10 py-2 mb-6 bg-bg/95 backdrop-blur border-b border-border flex gap-2 overflow-x-auto">${links}</nav>`;
-  }
-
-  function bindSubNav() {
-    const nav = document.getElementById("market-subnav");
-    if (!nav) return;
-    nav.addEventListener("click", (e) => {
-      const a = e.target.closest("a[data-section]");
-      if (!a) return;
-      e.preventDefault();
-      document.getElementById(a.dataset.section)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-    sectionObserver = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (!entry.isIntersecting) return;
-          nav.querySelectorAll("a[data-section]").forEach((l) => l.classList.remove("bg-surface2", "text-ink", "border-enchant"));
-          nav.querySelector(`a[data-section="${entry.target.id}"]`)?.classList.add("bg-surface2", "text-ink", "border-enchant");
-        });
-      },
-      { rootMargin: "-100px 0px -70% 0px", threshold: 0 }
-    );
-    SECTIONS.forEach((s) => {
-      const el = document.getElementById(s.id);
-      if (el) sectionObserver.observe(el);
-    });
   }
 
   // ---------------------------------------------------------------
@@ -322,7 +336,7 @@ window.PageMarket = (() => {
 
   function currencySelectorHTML() {
     return CURRENCIES.map((c) =>
-      `<button data-currency="${c.key}" class="chip-btn ${c.key === selectedCurrency ? "active" : ""}" title="${c.label}">${c.icon}</button>`
+      `<button data-currency="${c.key}" class="chip-btn ${c.key === selectedCurrency ? "active" : ""}" title="${c.label}">${currencyIconHTML(c.key, 18)}</button>`
     ).join("");
   }
 
@@ -361,12 +375,13 @@ window.PageMarket = (() => {
       itemOptions = topItems.map((i) => ({ item_id: i.item_id, item_name: i.item_name }));
       if (!selectedItemId && itemOptions.length) selectedItemId = itemOptions[0].item_id;
 
+      allActiveListings = activeListings;
+      shopPage = 1;
+
       const topSeller = topSellers[0];
       const topItem = topItems[0];
 
       contentWrap.innerHTML = `
-        ${subNavHTML()}
-
         <section id="sec-pouls" class="mb-10 scroll-mt-20">
           ${sectionTitle("🛒", "Pouls du marché", "alltime")}
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -389,11 +404,10 @@ window.PageMarket = (() => {
           </div>
         </section>
 
-        <section id="sec-annonces" class="mb-10 scroll-mt-20">
-          ${sectionTitle("📋", "Annonces actives", "alltime", `${window.fmt.int(activeListings.length)} annonce(s) actuellement en vente.`)}
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
-            ${activeListings.slice(0, 20).map(listingRowHTML).join("") || emptyStateHTML("Aucune annonce active pour le moment.")}
-          </div>
+        <section id="sec-boutique" class="mb-10 scroll-mt-20">
+          ${sectionTitle("🏪", "Boutique", "alltime", `${window.fmt.int(activeListings.length)} annonce(s) actuellement en vente, ${SHOP_PAGE_SIZE} par page.`)}
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3" id="market-shop-grid"></div>
+          <div id="market-shop-pagination"></div>
         </section>
 
         <section id="sec-classements" class="mb-10 scroll-mt-20">
@@ -422,7 +436,15 @@ window.PageMarket = (() => {
         </section>
       `;
 
-      bindSubNav();
+      renderShopPage();
+      document.getElementById("market-shop-pagination")?.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-shop-page]");
+        if (!btn || btn.disabled) return;
+        shopPage = parseInt(btn.dataset.shopPage, 10);
+        renderShopPage();
+        document.getElementById("sec-boutique")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+
       buildPriceChart(await fetchDailyPrices(selectedItemId, selectedCurrency, priceSinceIso()));
 
       document.getElementById("market-item-select")?.addEventListener("change", (e) => {
@@ -477,7 +499,6 @@ window.PageMarket = (() => {
     await loadContent();
     return () => {
       destroyCharts();
-      if (sectionObserver) { sectionObserver.disconnect(); sectionObserver = null; }
       clearInterval(refreshTimer);
     };
   }
