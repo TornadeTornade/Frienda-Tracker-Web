@@ -15,7 +15,7 @@ function currentCleanup() {
   }
 }
 
-function route() {
+async function route() {
   currentCleanup();
   const fullHash = location.hash || "#classement";
   const routeKey = fullHash.split("?")[0]; // ← ignore la query string pour le matching
@@ -23,8 +23,12 @@ function route() {
   const root = document.getElementById("page-root");
   root.scrollTo?.(0, 0);
   window.scrollTo(0, 0);
-  const cleanup = handler();
-  if (typeof cleanup === "function") window.__pageCleanup = cleanup;
+  
+  // AJOUT DE "await" ICI pour récupérer la vraie fonction de nettoyage
+  const cleanup = await handler(); 
+  if (typeof cleanup === "function") {
+    window.__pageCleanup = cleanup;
+  }
 }
 
 window.addEventListener("hashchange", route);
