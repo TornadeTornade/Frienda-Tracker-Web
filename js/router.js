@@ -5,6 +5,7 @@ window.ROUTES = {
   "#profil": () => window.PageProfil.render(),
   "#stats": () => window.PageServerStats.render(),
   "#live": () => window.PageLiveFeed.render(),
+  "#marche": () => window.PageMarket.render(),
 };
 
 function currentCleanup() {
