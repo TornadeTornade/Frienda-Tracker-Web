@@ -4,6 +4,7 @@ window.SIDEBAR_PAGES = [
   { hash: "#podium", label: "Podium", icon: "🥇" },
   { hash: "#profil", label: "Profils", icon: "🙂" },
   { hash: "#stats", label: "Serveur Stats", icon: "📊" },
+  { hash: "#market", label: "Market", icon: "🛒" },
   { hash: "#live", label: "Live Feed", icon: "🔴" },
   { href: "https://frienda.vercel.app/", label: "Wiki", icon: "📖", external: true },
 ];
