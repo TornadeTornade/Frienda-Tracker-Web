@@ -19,6 +19,13 @@ window.PageProfil = (() => {
   let cardSelectedKeys = [];
   const RADAR_KEYS = ["playtime_seconds", "player_kills", "mob_kills", "blocks_broken", "distance_meters", "jumps"];
 
+  // Stats jamais affichées sur cette page (même si présentes dans STAT_CATEGORIES).
+  const HIDDEN_STAT_KEYS = ["diamond_ores_mined", "ancient_debris_mined"];
+  // Stats exclues uniquement du graphique « Évolution ».
+  const EVOLUTION_EXCLUDED_KEYS = ["xp_level"];
+  const visibleCategories = () => window.STAT_CATEGORIES.filter((c) => !HIDDEN_STAT_KEYS.includes(c.key));
+  const evolutionCategories = () => visibleCategories().filter((c) => !EVOLUTION_EXCLUDED_KEYS.includes(c.key));
+
   // ---------- Succès (advancements) ----------
   // Table attendue : player_advancements (une ligne par succès et par joueur).
   // Colonnes lues (tout est optionnel sauf uuid + un identifiant de succès) :
@@ -216,7 +223,7 @@ window.PageProfil = (() => {
   }
 
   function bestCategoryKeys(uuid, allStats, n = MAX_CARD_STATS) {
-    return window.STAT_CATEGORIES
+    return visibleCategories()
       .map((c) => ({ cat: c, rank: rankOf(uuid, c.key, allStats) }))
       .sort((a, b) => a.rank - b.rank)
       .slice(0, n)
@@ -294,7 +301,7 @@ window.PageProfil = (() => {
   }
 
   function cardStatChipsHTML() {
-    return window.STAT_CATEGORIES.map((c) => {
+    return visibleCategories().map((c) => {
       const active = cardSelectedKeys.includes(c.key);
       return `<button data-cardkey="${c.key}" class="chip-btn ${active ? "active" : ""}">${c.icon} ${c.short}</button>`;
     }).join("");
@@ -324,7 +331,7 @@ window.PageProfil = (() => {
   // Classement du joueur, restylé comme la grille de stats (card 2)
   function rankGridHTML(uuid, allStats) {
     const n = allStats.length || 1;
-    return window.STAT_CATEGORIES.map((c) => {
+    return visibleCategories().map((c) => {
       const rank = rankOf(uuid, c.key, allStats);
       return `
         <div class="card p-3">
@@ -450,7 +457,7 @@ window.PageProfil = (() => {
       </div>
 
       <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-8">
-        ${window.STAT_CATEGORIES.map(
+        ${visibleCategories().map(
           (c) => `
           <div class="card p-3">
             <p class="text-[10px] font-mono uppercase text-muted truncate">${c.icon} ${c.short}</p>
@@ -467,7 +474,7 @@ window.PageProfil = (() => {
             <div class="flex-1 min-w-0">
               <p class="text-[10px] font-mono uppercase tracking-wider text-muted mb-2">Statistique</p>
               <div class="flex flex-wrap gap-2" id="chart-cat-nav">
-                ${window.STAT_CATEGORIES.map(
+                ${evolutionCategories().map(
                   (c) => `<button data-key="${c.key}" class="chip-btn ${c.key === chartStatKey ? "active" : ""}">${c.icon} ${c.short}</button>`
                 ).join("")}
               </div>
