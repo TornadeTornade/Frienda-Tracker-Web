@@ -19,6 +19,30 @@ window.PageProfil = (() => {
   let cardSelectedKeys = [];
   const RADAR_KEYS = ["playtime_seconds", "player_kills", "mob_kills", "blocks_broken", "distance_meters", "jumps"];
 
+  // ---------- Succès (advancements) ----------
+  // Table attendue : player_advancements (une ligne par succès et par joueur).
+  // Colonnes lues (tout est optionnel sauf uuid + un identifiant de succès) :
+  //   - identifiant : advancement_id | advancement | key | id   (ex. "minecraft:story/mine_diamond")
+  //   - état        : completed (bool) OU completed_at (date, null = verrouillé)
+  //                   si aucune de ces colonnes n'existe, toute ligne présente = débloqué
+  //   - date        : completed_at | unlocked_at | achieved_at
+  //   - nom affiché : title | name (sinon dérivé de l'identifiant)
+  const ADVANCEMENTS_TABLE = "player_advancements";
+  const ADV_TAB_ICONS = {
+    story: "📖",
+    nether: "🔥",
+    end: "🐉",
+    adventure: "🧭",
+    husbandry: "🌾",
+  };
+  const ADV_FILTERS = [
+    { key: "all", label: "Tous" },
+    { key: "unlocked", label: "🔓 Débloqués" },
+    { key: "locked", label: "🔒 Verrouillés" },
+  ];
+  let advFilter = "all";
+  let currentAdvancements = [];
+
   // ---------- Favoris (localStorage) ----------
   const FAVORITES_KEY = "frienda_tracker_favorite_players";
   function getFavorites() {
@@ -56,6 +80,10 @@ window.PageProfil = (() => {
   }
   function profileShareUrl(username) {
     return `${location.origin}${location.pathname}#profil?p=${encodeURIComponent(username)}`;
+  }
+
+  function esc(str) {
+    return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
   async function fetchAllPlayersLight() {
@@ -112,6 +140,52 @@ window.PageProfil = (() => {
       .eq("uuid", uuid);
     if (error) return null;
     return count ?? 0;
+  }
+
+  // ---------- Succès : requête + normalisation ----------
+  function prettifyAdvancementId(id) {
+    const last = String(id).split("/").pop().split(":").pop();
+    const words = last.replace(/_/g, " ").trim();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : String(id);
+  }
+
+  function normalizeAdvancement(row) {
+    const id = row.advancement_id ?? row.advancement ?? row.key ?? row.id ?? "";
+    let unlocked = true;
+    if (row.completed !== undefined) unlocked = !!row.completed;
+    else if (row.completed_at !== undefined) unlocked = !!row.completed_at;
+    const date = row.completed_at ?? row.unlocked_at ?? row.achieved_at ?? null;
+    const tab = String(id).includes("/") ? String(id).split(":").pop().split("/")[0] : "";
+    return {
+      id: String(id),
+      title: row.title || row.name || prettifyAdvancementId(id),
+      unlocked,
+      date: unlocked ? date : null,
+      icon: ADV_TAB_ICONS[tab] ?? "🏅",
+    };
+  }
+
+  async function fetchAdvancements(uuid) {
+    try {
+      const { data, error } = await window.sb
+        .from(ADVANCEMENTS_TABLE)
+        .select("*")
+        .eq("uuid", uuid)
+        .limit(1000);
+      if (error) throw error;
+      return (data ?? [])
+        .map(normalizeAdvancement)
+        .filter((a) => a.id && !/(^|:)recipes\//.test(a.id)) // on ignore les "succès" de recettes
+        .sort((a, b) => {
+          if (a.unlocked !== b.unlocked) return a.unlocked ? -1 : 1;
+          const da = a.date ? new Date(a.date).getTime() : 0;
+          const db = b.date ? new Date(b.date).getTime() : 0;
+          return db - da || a.title.localeCompare(b.title, "fr");
+        });
+    } catch (e) {
+      console.error("Impossible de charger les succès", e);
+      return [];
+    }
   }
 
   function summarizeSessions(sessions) {
@@ -259,12 +333,73 @@ window.PageProfil = (() => {
     }).join("");
   }
 
-  async function profileHTML(p, allStats, sessions, sessionsCount) {
+  // ---------- Succès : rendu ----------
+  function advancementFilterChipsHTML() {
+    return ADV_FILTERS.map(
+      (f) => `<button data-advfilter="${f.key}" class="chip-btn ${f.key === advFilter ? "active" : ""}">${f.label}</button>`
+    ).join("");
+  }
+
+  function advancementsGridHTML(advs, filter) {
+    const list = advs.filter((a) => (filter === "unlocked" ? a.unlocked : filter === "locked" ? !a.unlocked : true));
+    if (!list.length) {
+      return `<p class="text-sm text-muted py-4 text-center col-span-full">Aucun succès dans cette catégorie.</p>`;
+    }
+    return list
+      .map((a) => {
+        const dateLabel = a.unlocked && a.date
+          ? new Date(a.date).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" })
+          : a.unlocked
+          ? "Débloqué"
+          : "Verrouillé";
+        return `
+        <div class="card p-3 flex items-center gap-3 ${a.unlocked ? "border-gold/40" : "opacity-50 grayscale"}" title="${esc(a.id)}">
+          <span class="w-9 h-9 rounded-md bg-bg shadow-slot flex items-center justify-center text-base shrink-0">${a.unlocked ? a.icon : "🔒"}</span>
+          <div class="min-w-0 flex-1">
+            <p class="text-xs font-bold truncate ${a.unlocked ? "text-ink" : "text-muted"}">${esc(a.title)}</p>
+            <p class="text-[10px] font-mono ${a.unlocked ? "text-gold" : "text-muted"}">${dateLabel}</p>
+          </div>
+        </div>`;
+      })
+      .join("");
+  }
+
+  function advancementsSectionHTML(advs) {
+    if (!advs.length) {
+      return `
+      <section class="mb-8">
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🏆 Succès</p>
+        <div class="card p-4"><p class="text-sm text-muted">Aucun succès enregistré pour ce joueur pour l'instant.</p></div>
+      </section>`;
+    }
+    const unlockedCount = advs.filter((a) => a.unlocked).length;
+    const pct = Math.round((unlockedCount / advs.length) * 100);
+    return `
+      <section class="mb-8">
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🏆 Succès</p>
+        <div class="card p-4 mb-4">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+            <p class="text-sm text-muted">
+              <span class="text-ink font-bold font-mono">${window.fmt.int(unlockedCount)}</span> / ${window.fmt.int(advs.length)} débloqués
+              <span class="font-mono text-gold ml-1">(${pct}%)</span>
+            </p>
+            <div class="flex flex-wrap gap-2" id="adv-filter-nav">${advancementFilterChipsHTML()}</div>
+          </div>
+          <div class="h-2 rounded-full bg-bg shadow-slot overflow-hidden">
+            <div class="h-full bg-gold" style="width:${pct}%"></div>
+          </div>
+        </div>
+        <div id="adv-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">${advancementsGridHTML(advs, advFilter)}</div>
+      </section>`;
+  }
+
+  async function profileHTML(p, allStats, sessions, sessionsCount, advancements) {
     const online = await isOnline(p.uuid);
     const fav = isFavorite(p.username);
     const memberSince = p.first_seen
       ? new Date(p.first_seen).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" })
       : "N/A";
+    const xpLevelText = p.xp_level != null ? window.fmt.int(p.xp_level) : "N/A";
     const lastSeenBadge =
       !online && sessions.length
         ? `<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border text-muted">
@@ -282,7 +417,7 @@ window.PageProfil = (() => {
           <img src="${window.avatarHead(p.uuid, 64)}" class="w-16 h-16 rounded-md shadow-slot shrink-0" alt="" />
           <div class="min-w-0">
             <div class="flex items-center gap-2 justify-center sm:justify-start">
-              <h2 class="text-xl font-extrabold truncate">${p.username}</h2>
+              <h2 class="text-xl font-extrabold truncate">${esc(p.username)}</h2>
               <button id="fav-toggle-btn" class="shrink-0 text-lg leading-none transition-colors ${
                 fav ? "text-gold" : "text-muted hover:text-gold"
               }" title="${fav ? "Retirer des favoris" : "Ajouter aux favoris"}">${fav ? "★" : "☆"}</button>
@@ -296,8 +431,10 @@ window.PageProfil = (() => {
                 <span class="w-1.5 h-1.5 rounded-full ${online ? "bg-green live-dot" : "bg-muted"}"></span>
                 ${online ? "En ligne" : "Hors ligne"}
               </span>
-              <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border text-muted">
-                ⭐ Niveau XP : N/A
+              <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border ${
+                p.xp_level != null ? "text-ink" : "text-muted"
+              }">
+                ⭐ Niveau XP : ${xpLevelText}
               </span>
               <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border text-muted">
                 🗓️ Membre depuis : ${memberSince}
@@ -368,6 +505,8 @@ window.PageProfil = (() => {
           <div class="card divide-y divide-border" id="radar-breakdown"></div>
         </div>
       </section>
+
+      ${advancementsSectionHTML(advancements)}
 
       <section class="mb-8">
         <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🃏 Player Card</p>
@@ -630,7 +769,7 @@ window.PageProfil = (() => {
         <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;color:#F2B33D;">FRIENDA TRACKER</div>
         <div style="font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:700;color:#F2B33D;margin-top:6px;">#${globalRank}</div>
         <img src="${window.avatarBody3D(p.uuid, 190)}" style="height:180px;margin-top:6px;filter:drop-shadow(0 10px 18px rgba(0,0,0,.6));" crossorigin="anonymous" />
-        <div style="font-weight:800;font-size:20px;margin-top:8px;">${p.username}</div>
+        <div style="font-weight:800;font-size:20px;margin-top:8px;">${esc(p.username)}</div>
         <div style="width:100%;height:1px;background:rgba(255,255,255,.12);margin:14px 0;"></div>
         <div style="display:flex;width:100%;justify-content:space-between;gap:8px;">
           ${selectedKeys
@@ -715,8 +854,8 @@ window.PageProfil = (() => {
     if (!matches.length) return `<div class="px-3 py-2 text-sm text-muted">Aucun joueur trouvé.</div>`;
     return matches
       .map(
-        (p) => `<button data-pick="${p.username}" class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface2 text-sm">
-                  <img src="${window.avatarHead(p.uuid, 20)}" class="w-5 h-5 rounded" alt="" />${p.username}
+        (p) => `<button data-pick="${esc(p.username)}" class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface2 text-sm">
+                  <img src="${window.avatarHead(p.uuid, 20)}" class="w-5 h-5 rounded" alt="" />${esc(p.username)}
                 </button>`
       )
       .join("");
@@ -740,14 +879,17 @@ window.PageProfil = (() => {
       history.replaceState(null, "", profileShareUrl(p.username));
 
       // sélection par défaut de la Player Card = les 3 meilleures catégories du joueur
-      const [allStats, sessions, sessionsCount] = await Promise.all([
+      const [allStats, sessions, sessionsCount, advancements] = await Promise.all([
         fetchAllStats(),
         fetchSessions(p.uuid),
         fetchSessionsCount(p.uuid),
+        fetchAdvancements(p.uuid),
       ]);
       cardSelectedKeys = bestCategoryKeys(p.uuid, allStats, MAX_CARD_STATS);
+      currentAdvancements = advancements;
+      advFilter = "all";
 
-      wrap.innerHTML = await profileHTML(p, allStats, sessions, sessionsCount);
+      wrap.innerHTML = await profileHTML(p, allStats, sessions, sessionsCount, advancements);
       updateCardCountLabel();
       renderProfileRadar(p.uuid, allStats);
       renderSkin3D(p.uuid);
@@ -798,6 +940,19 @@ window.PageProfil = (() => {
         renderProfileRadar(p.uuid, allStats);
       });
 
+      // Filtre des succès (Tous / Débloqués / Verrouillés) — la nav n'existe que s'il y a des succès
+      const advNav = document.getElementById("adv-filter-nav");
+      if (advNav) {
+        advNav.addEventListener("click", (e) => {
+          const btn = e.target.closest("button[data-advfilter]");
+          if (!btn) return;
+          advFilter = btn.dataset.advfilter;
+          window.$$("#adv-filter-nav .chip-btn").forEach((b) => b.classList.toggle("active", b === btn));
+          const grid = document.getElementById("adv-grid");
+          if (grid) grid.innerHTML = advancementsGridHTML(currentAdvancements, advFilter);
+        });
+      }
+
       document.getElementById("card-stat-nav").addEventListener("click", (e) => {
         const btn = e.target.closest("button[data-cardkey]");
         if (!btn) return;
@@ -847,8 +1002,8 @@ window.PageProfil = (() => {
         <span class="text-[10px] font-mono uppercase tracking-wider text-muted mr-1 shrink-0">⭐ Favoris :</span>
         ${favs
           .map(
-            (u) => `<button data-fav-pick="${u}" class="chip-btn !py-1.5 !px-2.5 flex items-center gap-1.5">
-                      <img src="${window.avatarHead(u, 16)}" class="w-4 h-4 rounded" alt="" />${u}
+            (u) => `<button data-fav-pick="${esc(u)}" class="chip-btn !py-1.5 !px-2.5 flex items-center gap-1.5">
+                      <img src="${window.avatarHead(u, 16)}" class="w-4 h-4 rounded" alt="" />${esc(u)}
                     </button>`
           )
           .join("")}
