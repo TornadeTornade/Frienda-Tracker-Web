@@ -16,6 +16,10 @@ window.STAT_CATEGORIES = [
   { key: "jumps", label: "Sauts", short: "Sauts", icon: "🦘", format: "int" },
   { key: "items_enchanted", label: "Objets enchantés", short: "Enchant.", icon: "✨", format: "int" },
   { key: "items_dropped", label: "Objets jetés", short: "Jetés", icon: "📦", format: "int" },
+  { key: "villager_trades", label: "Échanges villageois", short: "Échanges", icon: "🧑‍🌾", format: "int" },
+  { key: "diamonds_mined", label: "Diamants minés", short: "Diamants", icon: "💎", format: "int" },
+  { key: "ancient_debris_mined", label: "Débris antiques minés", short: "Débris", icon: "🟫", format: "int" },
+  { key: "xp_level", label: "Niveau XP", short: "Niveau", icon: "⭐", format: "int" },
 ];
 
 window.statByKey = (key) => window.STAT_CATEGORIES.find((s) => s.key === key);
