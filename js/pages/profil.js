@@ -152,7 +152,8 @@ window.PageProfil = (() => {
   function normalizeAdvancement(row) {
     const id = row.advancement_id ?? row.advancement ?? row.key ?? row.id ?? "";
     let unlocked = true;
-    if (row.completed !== undefined) unlocked = !!row.completed;
+    if (row.unlocked !== undefined) unlocked = !!row.unlocked;
+    else if (row.completed !== undefined) unlocked = !!row.completed;
     else if (row.completed_at !== undefined) unlocked = !!row.completed_at;
     const date = row.completed_at ?? row.unlocked_at ?? row.achieved_at ?? null;
     const tab = String(id).includes("/") ? String(id).split(":").pop().split("/")[0] : "";
