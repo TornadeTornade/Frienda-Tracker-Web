@@ -159,7 +159,7 @@ window.PageProfil = (() => {
     const tab = String(id).includes("/") ? String(id).split(":").pop().split("/")[0] : "";
     return {
       id: String(id),
-      title: row.title || row.name || prettifyAdvancementId(id),
+      title: row.advancement_name || row.title || row.name || prettifyAdvancementId(id),
       unlocked,
       date: unlocked ? date : null,
       icon: ADV_TAB_ICONS[tab] ?? "🏅",
