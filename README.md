@@ -12,10 +12,11 @@ Dashboard web interactif lié au mod Minecraft **Frienda Tracker**. Il permet de
 
 ## ✨ Fonctionnalités
 
-* 🏆 **Classements Général :** Tri par catégorie (temps de jeu, kills, minage, etc.).
-* ⚔️ **Comparateur :** Comparaison directe des statistiques entre joueurs.
+* 🏆 **Classements & Podium :** Tri par catégorie (temps de jeu, kills, minage, etc.), recordmen et export du podium en image.
+* ⚔️ **Comparateur :** Comparaison directe des statistiques entre 2 et 4 joueurs.
 * 👤 **Profils :** Graphiques d'aptitudes et cartes de joueur à exporter.
 * 📊 **Statistiques globales :** Métriques de la communauté et activité du serveur.
+* 🛒 **Marché & Live :** Cours, annonces, ventes et fil d'événements en direct.
 * 🎮 **Statut en direct :** Nombre de joueurs en ligne et IP du serveur (`frienda.exaroton.me`).
 
 ---
@@ -23,8 +24,10 @@ Dashboard web interactif lié au mod Minecraft **Frienda Tracker**. Il permet de
 ## 🛠️ Technologies utilisées
 
 * **HTML5 & Vanilla JavaScript (ES6+)** — Aucun framework lourd, chargement instantané.
-* **Tailwind CSS** — Framework CSS pour une mise en page moderne et sobre.
-* **FontAwesome 6** — Iconographie.
+* **Tailwind CSS** — Mise en page ; palette quasi monochrome définie dans `index.html`, `css/style.css` et `js/theme.js` (à garder synchronisés).
+* **Lucide** — Iconographie en trait fin, embarquée dans `js/icons.js` (aucun appel CDN). Pour ajouter une icône, ajouter son tracé dans `window.ICONS`.
+* **Geist** — Police (Google Fonts).
+* **Chart.js** — Graphiques.
 * **Supabase REST API** — Récupération des données joueurs.
 * **MC-Heads API** — Rendu automatique des têtes d'avatars Minecraft.
 

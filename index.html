@@ -1,42 +1,42 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" class="dark">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#09090B" />
 <title>Frienda Tracker</title>
 <meta name="description" content="Statistiques en direct des joueurs du serveur Minecraft Frienda." />
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
 
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
+  // Palette quasi monochrome (échelle "zinc"). Seuls le vert et le rouge portent
+  // une information (hausse / baisse, en ligne / erreur) ; tout le reste est neutre.
   tailwind.config = {
     theme: {
       extend: {
         colors: {
-          bg: "#0B0F14",
-          surface: "#121821",
-          surface2: "#1A222D",
-          border: "#26313D",
-          muted: "#8B98A8",
-          ink: "#E9EEF3",
-          gold: "#F2B33D",
-          enchant: "#8B6CF2",
-          enchant2: "#6D4FE0",
-          green: "#48D982",
-          red: "#F2545B",
-          bronze: "#C97A4A",
-          silver: "#B9C2CC",
+          bg: "#09090B",
+          surface: "#0F0F11",
+          surface2: "#18181B",
+          hover: "#1F1F23",
+          border: "#27272A",
+          border2: "#3F3F46",
+          muted: "#A1A1AA",
+          dim: "#71717A",
+          ink: "#FAFAFA",
+          green: "#4ADE80",
+          red: "#F87171",
         },
         fontFamily: {
-          sans: ["Sora", "sans-serif"],
-          mono: ["JetBrains Mono", "monospace"],
-        },
-        boxShadow: {
-          slot: "inset 0 0 0 1px #26313D, inset 0 -3px 0 rgba(0,0,0,.35), inset 0 3px 0 rgba(255,255,255,.03)",
-          card: "0 1px 0 rgba(255,255,255,.04) inset, 0 8px 24px -12px rgba(0,0,0,.6)",
+          sans: ["Geist", "ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+          // "mono" est conservé comme nom de classe pour les chiffres : même famille
+          // que le reste, avec chiffres tabulaires (voir style.css).
+          mono: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
         },
       },
     },
@@ -53,109 +53,65 @@
 </head>
 <body class="bg-bg text-ink font-sans antialiased">
 
-<header class="md:hidden flex items-center justify-between px-4 py-3 bg-surface border-b border-border sticky top-0 z-30">
-  <div class="flex items-center gap-3">
-    <div class="w-8 h-8 rounded-md bg-surface2 shadow-slot flex items-center justify-center overflow-hidden">
-      <img src="frienda_tacker_logo.jpg" alt="Logo" class="w-full h-full object-cover">
-    </div>
-    <div>
-      <p class="font-extrabold tracking-tight leading-none text-sm">FRIENDA</p>
-      <p class="text-[10px] font-mono text-muted tracking-wide">TRACKER</p>
-    </div>
-  </div>
-  <button id="mobile-menu-btn" aria-label="Ouvrir le menu" class="p-2 text-ink hover:bg-surface2 rounded-md border border-border">
-    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
-    </svg>
-  </button>
-</header>
+<div id="sidebar-overlay" class="fixed inset-0 bg-black/70 z-40 hidden md:hidden"></div>
 
-<div class="flex min-h-screen flex-col md:flex-row">
+<div class="flex min-h-screen">
 
-  <div id="sidebar-overlay" class="fixed inset-0 bg-black/60 z-40 hidden md:hidden transition-opacity"></div>
+  <aside id="sidebar" class="fixed inset-y-0 left-0 z-50 shrink-0 h-screen flex flex-col bg-bg border-r border-border -translate-x-full md:translate-x-0 md:sticky md:top-0">
 
-  <aside id="sidebar" class="fixed inset-y-0 left-0 z-50 w-[260px] shrink-0 h-screen flex flex-col bg-surface border-r border-border transition-transform duration-200 -translate-x-full md:translate-x-0 md:sticky md:top-0">
-
-    <div class="px-5 pt-6 pb-5 border-b border-border flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-md bg-surface2 shadow-slot flex items-center justify-center overflow-hidden">
-          <img src="frienda_tacker_logo.jpg" alt="Logo" class="w-full h-full object-cover">
-        </div>
-        <div>
-          <p class="font-extrabold tracking-tight leading-none text-[15px]">FRIENDA</p>
-          <p class="text-[11px] font-mono text-muted tracking-wide">TRACKER</p>
-        </div>
+    <div class="h-14 px-4 border-b border-border flex items-center justify-between gap-2">
+      <div class="flex items-center gap-2.5 min-w-0">
+        <img src="frienda_tacker_logo.jpg" alt="Frienda Tracker" class="w-7 h-7 rounded-md object-cover shrink-0 border border-border">
+        <span class="sb-label font-semibold tracking-tight text-[15px] truncate">Frienda <span class="text-dim font-normal">Tracker</span></span>
       </div>
-      <button id="close-menu-btn" aria-label="Fermer le menu" class="md:hidden text-muted hover:text-ink p-1">
-        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-        </svg>
+      <button id="close-menu-btn" aria-label="Fermer le menu" class="md:hidden text-muted hover:text-ink p-1.5 rounded-md hover:bg-surface2"></button>
+    </div>
+
+    <nav id="sidebar-nav" class="flex-1 overflow-y-auto py-4 px-3" aria-label="Navigation principale"></nav>
+
+    <div class="p-3 border-t border-border hidden md:block">
+      <button id="collapse-btn" class="nav-item w-full" aria-label="Réduire le menu" title="Réduire le menu">
+        <span id="collapse-ic" class="nav-ic"></span>
+        <span class="sb-label">Réduire</span>
       </button>
-    </div>
-
-    <nav id="sidebar-nav" class="flex-1 overflow-y-auto py-4 px-3 space-y-1"></nav>
-
-    <div class="px-3 pb-4">
-      <div class="rounded-lg bg-surface2 shadow-slot p-3">
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-[11px] font-mono uppercase tracking-wider text-muted">Serveur</span>
-          <span id="online-dot" class="w-2 h-2 rounded-full bg-green shadow-[0_0_8px_2px_rgba(72,217,130,.6)]"></span>
-        </div>
-        <div class="flex items-baseline gap-1 mb-3">
-          <span id="online-count" class="font-mono text-2xl font-bold text-ink">–</span>
-          <span class="text-xs text-muted">joueur(s) en ligne</span>
-        </div>
-        <button id="copy-ip-btn"
-          class="w-full text-left group flex items-center justify-between rounded-md bg-bg/60 hover:bg-bg border border-border px-3 py-2 transition-colors">
-          <span class="font-mono text-[12px] text-ink truncate">frienda.exaroton.me</span>
-          <span class="text-[10px] font-mono uppercase text-gold group-hover:text-white transition-colors" id="copy-ip-label">Copier</span>
-        </button>
-      </div>
     </div>
   </aside>
 
-  <main class="flex-1 min-w-0">
-    <div id="page-root" class="max-w-[1200px] mx-auto px-4 sm:px-6 md:px-10 py-6 md:py-8"></div>
-  </main>
+  <div class="flex-1 min-w-0 flex flex-col">
+
+    <header id="topbar" class="sticky top-0 z-30 h-14 px-4 md:px-8 border-b border-border bg-bg/80 backdrop-blur flex items-center gap-3">
+      <button id="mobile-menu-btn" aria-label="Ouvrir le menu" class="md:hidden -ml-1 p-2 text-muted hover:text-ink rounded-md hover:bg-surface2"></button>
+      <h1 id="page-title" class="text-[15px] font-semibold tracking-tight truncate">Classements</h1>
+
+      <div class="ml-auto flex items-center gap-2 shrink-0">
+        <span class="badge" title="Joueurs actuellement connectés">
+          <span id="online-dot" class="w-1.5 h-1.5 rounded-full bg-dim"></span>
+          <span><span id="online-count" class="font-medium text-ink">–</span> <span class="hidden sm:inline">en ligne</span></span>
+        </span>
+        <button id="copy-ip-btn" class="btn-outline" title="Copier l'adresse du serveur">
+          <span id="copy-ip-ic" class="shrink-0"></span>
+          <span class="hidden sm:inline text-[12.5px]" id="copy-ip-text">frienda.exaroton.me</span>
+          <span class="sm:hidden text-[12.5px]" id="copy-ip-label">IP</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="flex-1 min-w-0">
+      <div id="page-root" class="max-w-[1280px] mx-auto px-4 md:px-8 py-6 md:py-8"></div>
+    </main>
+  </div>
 </div>
 
-<div id="toast" class="fixed bottom-6 right-6 z-50 hidden">
-  <div class="bg-surface2 border border-border shadow-card rounded-md px-4 py-3 text-sm"></div>
+<div id="toast" class="fixed bottom-6 right-6 z-[60] hidden" role="status" aria-live="polite">
+  <div class="rounded-lg px-4 py-3 text-sm border"></div>
 </div>
 
-<script>
-  const menuBtn = document.getElementById('mobile-menu-btn');
-  const closeBtn = document.getElementById('close-menu-btn');
-  const sidebar = document.getElementById('sidebar');
-  const overlay = document.getElementById('sidebar-overlay');
-
-  function openMenu() {
-    sidebar.classList.remove('-translate-x-full');
-    overlay.classList.remove('hidden');
-    document.body.classList.add('overflow-hidden', 'md:overflow-auto');
-  }
-
-  function closeMenu() {
-    sidebar.classList.add('-translate-x-full');
-    overlay.classList.add('hidden');
-    document.body.classList.remove('overflow-hidden', 'md:overflow-auto');
-  }
-
-  if (menuBtn) menuBtn.addEventListener('click', openMenu);
-  if (closeBtn) closeBtn.addEventListener('click', closeMenu);
-  if (overlay) overlay.addEventListener('click', closeMenu);
-
-  // Fermer le menu lors de la navigation
-  document.getElementById('sidebar-nav')?.addEventListener('click', (e) => {
-    if (e.target.closest('a') || e.target.closest('button')) {
-      closeMenu();
-    }
-  });
-</script>
-
+<script src="js/icons.js"></script>
 <script src="js/config.js"></script>
 <script src="js/supabaseClient.js"></script>
+<script src="js/theme.js"></script>
 <script src="js/utils.js"></script>
+<script src="js/ui.js"></script>
 <script src="js/sidebar.js"></script>
 <script src="js/pages/classement.js"></script>
 <script src="js/pages/comparateur.js"></script>

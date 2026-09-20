@@ -1,25 +1,25 @@
 // ============================================================
 // Catégories de statistiques -- source de vérité unique.
 // `key` doit correspondre exactement à une colonne de la table
-// Supabase `player_stats`.
+// Supabase `player_stats`. `icon` = nom d'icône Lucide (voir js/icons.js).
 // ============================================================
 window.STAT_CATEGORIES = [
-  { key: "playtime_seconds", label: "Temps de jeu", short: "Temps", icon: "⏱️", format: "duration" },
-  { key: "player_kills", label: "Kills PvP", short: "PvP", icon: "⚔️", format: "int" },
-  { key: "mob_kills", label: "Kills Mobs", short: "Mobs", icon: "🗡️", format: "int" },
-  { key: "deaths", label: "Morts", short: "Morts", icon: "💀", format: "int" },
-  { key: "blocks_broken", label: "Blocs cassés", short: "Minage", icon: "⛏️", format: "int" },
-  { key: "blocks_placed", label: "Blocs posés", short: "Construction", icon: "🧱", format: "int" },
-  { key: "distance_meters", label: "Distance parcourue", short: "Distance", icon: "🥾", format: "distance" },
-  { key: "damage_dealt", label: "Dégâts infligés", short: "Dégâts inf.", icon: "🔥", format: "int" },
-  { key: "damage_taken", label: "Dégâts subis", short: "Dégâts sub.", icon: "🛡️", format: "int" },
-  { key: "jumps", label: "Sauts", short: "Sauts", icon: "🦘", format: "int" },
-  { key: "items_enchanted", label: "Objets enchantés", short: "Enchant.", icon: "✨", format: "int" },
-  { key: "items_dropped", label: "Objets jetés", short: "Jetés", icon: "📦", format: "int" },
-  { key: "villager_trades", label: "Échanges villageois", short: "Échanges", icon: "🧑‍🌾", format: "int" },
-  { key: "diamonds_mined", label: "Diamants minés", short: "Diamants", icon: "💎", format: "int" },
-  { key: "ancient_debris_mined", label: "Débris antiques minés", short: "Débris", icon: "🟫", format: "int" },
-  { key: "xp_level", label: "Niveau XP", short: "Niveau", icon: "⭐", format: "int" },
+  { key: "playtime_seconds", label: "Temps de jeu", short: "Temps", icon: "clock", format: "duration" },
+  { key: "player_kills", label: "Kills PvP", short: "PvP", icon: "swords", format: "int" },
+  { key: "mob_kills", label: "Kills Mobs", short: "Mobs", icon: "ghost", format: "int" },
+  { key: "deaths", label: "Morts", short: "Morts", icon: "skull", format: "int" },
+  { key: "blocks_broken", label: "Blocs cassés", short: "Minage", icon: "pickaxe", format: "int" },
+  { key: "blocks_placed", label: "Blocs posés", short: "Construction", icon: "blocks", format: "int" },
+  { key: "distance_meters", label: "Distance parcourue", short: "Distance", icon: "footprints", format: "distance" },
+  { key: "damage_dealt", label: "Dégâts infligés", short: "Dégâts inf.", icon: "flame", format: "int" },
+  { key: "damage_taken", label: "Dégâts subis", short: "Dégâts sub.", icon: "shield", format: "int" },
+  { key: "jumps", label: "Sauts", short: "Sauts", icon: "chevrons-up", format: "int" },
+  { key: "items_enchanted", label: "Objets enchantés", short: "Enchant.", icon: "sparkles", format: "int" },
+  { key: "items_dropped", label: "Objets jetés", short: "Jetés", icon: "package", format: "int" },
+  { key: "villager_trades", label: "Échanges villageois", short: "Échanges", icon: "handshake", format: "int" },
+  { key: "diamond_ores_mined", label: "Diamants minés", short: "Diamants", icon: "gem", format: "int" },
+  { key: "ancient_debris_mined", label: "Débris antiques minés", short: "Débris", icon: "box", format: "int" },
+  { key: "xp_level", label: "Niveau XP", short: "Niveau", icon: "star", format: "int" },
 ];
 
 window.statByKey = (key) => window.STAT_CATEGORIES.find((s) => s.key === key);
@@ -105,18 +105,22 @@ window.showToast = (message, type = "default") => {
   const box = wrap.firstElementChild;
   box.textContent = message;
   box.className =
-    "shadow-card rounded-md px-4 py-3 text-sm border " +
+    "rounded-lg px-4 py-3 text-sm border shadow-lg shadow-black/40 " +
     (type === "success"
-      ? "bg-green/10 border-green/40 text-green"
+      ? "bg-surface2 border-green/40 text-ink"
       : type === "error"
-      ? "bg-red/10 border-red/40 text-red"
-      : "bg-surface2 border-border text-ink");
+      ? "bg-surface2 border-red/40 text-red"
+      : "bg-surface2 border-border2 text-ink");
   wrap.classList.remove("hidden");
   clearTimeout(window.__toastTimer);
   window.__toastTimer = setTimeout(() => wrap.classList.add("hidden"), 2500);
 };
 
+// Échappement HTML (pseudos, noms d'items… tout ce qui vient de la base)
+window.esc = (str) =>
+  String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 window.skeletonRows = (n, height = "h-16") =>
   Array.from({ length: n })
-    .map(() => `<div class="skeleton ${height} rounded-xl mb-2"></div>`)
+    .map(() => `<div class="skeleton ${height} rounded-lg mb-2"></div>`)
     .join("");

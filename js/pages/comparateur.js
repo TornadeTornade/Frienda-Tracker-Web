@@ -8,8 +8,6 @@ window.PageComparateur = (() => {
   let radarInstance = null;
   let draggedUuid = null; // uuid en cours de drag dans les chips
 
-  const RADAR_COLORS = ["#8B6CF2", "#F2B33D", "#48D982", "#F2545B"];
-
   async function fetchAllPlayersLight() {
     const { data, error } = await window.sb.from("player_stats").select("uuid, username").order("username");
     if (error) throw error;
@@ -61,17 +59,19 @@ window.PageComparateur = (() => {
   // --- Rendu ---------------------------------------------------------------
 
   function chipsHTML() {
-    if (!selected.length) return `<p class="text-sm text-muted">Aucun joueur sélectionné pour le moment.</p>`;
+    if (!selected.length) return `<p class="text-sm text-dim">Aucun joueur sélectionné pour le moment.</p>`;
     return selected
       .map((uuid) => {
         const p = allPlayers.find((x) => x.uuid === uuid);
+        const s = window.SERIES[selected.indexOf(uuid)] || window.SERIES[0];
         return `
         <span draggable="true" data-chip="${uuid}" title="Glisser pour réordonner"
-          class="inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1.5 rounded-full bg-surface2 border border-border cursor-grab active:cursor-grabbing select-none">
-          <span class="text-muted text-xs px-0.5 pointer-events-none">⠿</span>
-          <img src="${window.avatarHead(uuid, 22)}" class="w-5 h-5 rounded pointer-events-none" alt="" />
-          <span class="text-sm font-medium pointer-events-none">${p ? p.username : uuid}</span>
-          <button data-remove="${uuid}" class="text-muted hover:text-red text-xs ml-1">✕</button>
+          class="inline-flex items-center gap-2 pl-1.5 pr-2 h-9 rounded-lg bg-surface2 border border-border cursor-grab active:cursor-grabbing select-none">
+          <span class="text-dim pointer-events-none">${window.icon("grip-vertical", 14)}</span>
+          <span class="w-2 h-2 rounded-full pointer-events-none" style="background:${s.color}"></span>
+          ${window.ui.avatar(uuid, 20, "pointer-events-none")}
+          <span class="text-sm font-medium pointer-events-none">${p ? window.esc(p.username) : uuid}</span>
+          <button data-remove="${uuid}" aria-label="Retirer ${p ? window.esc(p.username) : ""}" class="text-dim hover:text-ink ml-0.5 p-0.5 rounded">${window.icon("x", 14)}</button>
         </span>`;
       })
       .join("");
@@ -83,13 +83,13 @@ window.PageComparateur = (() => {
     const matches = allPlayers
       .filter((p) => p.username.toLowerCase().includes(q) && !selected.includes(p.uuid))
       .slice(0, 8);
-    if (!matches.length) return `<div class="px-3 py-2 text-sm text-muted">Aucun joueur trouvé.</div>`;
+    if (!matches.length) return `<div class="px-3 py-2.5 text-sm text-muted">Aucun joueur trouvé.</div>`;
     return matches
       .map(
         (p) => `
-        <button data-pick="${p.uuid}" class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface2 text-sm">
-          <img src="${window.avatarHead(p.uuid, 20)}" class="w-5 h-5 rounded" alt="" />
-          ${p.username}
+        <button data-pick="${p.uuid}" class="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-surface2 text-sm">
+          ${window.ui.avatar(p.uuid, 20)}
+          ${window.esc(p.username)}
         </button>`
       )
       .join("");
@@ -98,55 +98,54 @@ window.PageComparateur = (() => {
   function cellHTML(cat, value, max) {
     const isMax = value === max && max > 0;
     if (isMax) {
-      return `<td class="py-2.5 px-3 text-center font-mono text-sm text-green font-bold">
-                ${window.fmt.statValue(cat.key, value)}
+      return `<td class="text-center font-mono text-sm font-semibold">
+                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-green/10 text-green">${window.fmt.statValue(cat.key, value)}</span>
               </td>`;
     }
     const diff = max - value;
     const pct = max > 0 ? Math.round((diff / max) * 100) : 0;
-    return `<td class="py-2.5 px-3 text-center font-mono text-sm text-muted">
-              <span class="text-red">−${window.fmt.statValue(cat.key, diff)}</span>
-              <span class="block text-[10px] opacity-70">(${pct}%)</span>
+    return `<td class="text-center font-mono text-sm">
+              <span class="text-ink">${window.fmt.statValue(cat.key, value)}</span>
+              <span class="block text-[11.5px] text-dim mt-0.5">−${pct < 1 ? "<1" : pct} %</span>
             </td>`;
   }
 
   function tableHTML(stats) {
     if (stats.length < MIN_PLAYERS) {
-      return `<p class="text-sm text-muted mt-4">Sélectionne au moins ${MIN_PLAYERS} joueurs pour lancer la comparaison.</p>`;
+      return window.ui.empty(`Sélectionne au moins ${MIN_PLAYERS} joueurs pour lancer la comparaison.`, "scale");
     }
     const rows = window.STAT_CATEGORIES.map((cat) => {
       const values = stats.map((s) => s[cat.key] ?? 0);
       const max = Math.max(...values);
       return `
-        <tr class="border-b border-border last:border-0">
-          <td class="py-2.5 pr-3 text-muted text-sm whitespace-nowrap">${cat.icon} ${cat.label}</td>
+        <tr>
+          <td class="text-muted text-[13.5px] whitespace-nowrap"><span class="inline-flex items-center gap-2">${window.catIcon(cat, 14, "text-dim")}${cat.label}</span></td>
           ${stats.map((s) => cellHTML(cat, s[cat.key] ?? 0, max)).join("")}
         </tr>`;
     }).join("");
 
     return `
-      <div class="card overflow-x-auto mt-5">
-        <table class="w-full min-w-[560px]">
+      <div class="overflow-x-auto">
+        <table class="tbl min-w-[520px]">
           <thead>
-            <tr class="border-b border-border">
-              <th class="py-3 pl-4 pr-3 text-left text-[11px] font-mono uppercase text-muted">Statistique</th>
+            <tr>
+              <th>Statistique</th>
               ${stats
                 .map(
                   (s) => `
-                <th class="py-3 px-3 text-center">
-                  <div class="flex flex-col items-center gap-1.5">
-                    <img src="${window.avatarHead(s.uuid, 32)}" class="w-8 h-8 rounded-md shadow-slot bg-bg" alt="" />
-                    <span class="text-sm font-semibold">${s.username}</span>
+                <th class="!text-center">
+                  <div class="flex flex-col items-center gap-1.5 py-1">
+                    ${window.ui.avatar(s.uuid, 28)}
+                    <span class="text-[13px] font-semibold text-ink">${window.esc(s.username)}</span>
                   </div>
                 </th>`
                 )
                 .join("")}
             </tr>
           </thead>
-          <tbody class="[&_td]:px-4">${rows}</tbody>
+          <tbody>${rows}</tbody>
         </table>
-      </div>
-      <p class="text-xs text-muted mt-3">🟢 = meilleure valeur du groupe · les autres cellules affichent l'écart par rapport au meilleur.</p>`;
+      </div>`;
   }
 
   async function renderRadar(stats) {
@@ -160,22 +159,28 @@ window.PageComparateur = (() => {
       type: "radar",
       data: {
         labels: window.STAT_CATEGORIES.map((c) => c.short),
-        datasets: stats.map((s, i) => ({
-          label: s.username,
-          data: window.STAT_CATEGORIES.map((c) => Math.round(((s[c.key] ?? 0) / max[c.key]) * 100)),
-          borderColor: RADAR_COLORS[i],
-          backgroundColor: RADAR_COLORS[i] + "33",
-          pointRadius: 2,
-        })),
+        datasets: stats.map((s, i) => {
+          const ser = window.SERIES[i] || window.SERIES[0];
+          return {
+            label: s.username,
+            data: window.STAT_CATEGORIES.map((c) => Math.round(((s[c.key] ?? 0) / max[c.key]) * 100)),
+            borderColor: ser.color,
+            borderDash: ser.dash,
+            borderWidth: 1.5,
+            backgroundColor: i === 0 ? window.THEME.fillMid : "transparent",
+            pointRadius: 2,
+            pointBackgroundColor: ser.color,
+          };
+        }),
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: "bottom", labels: { color: "#8B98A8", font: { size: 11 } } } },
+        plugins: { legend: { position: "bottom" } },
         scales: {
           r: {
-            angleLines: { color: "#1A222D" },
-            grid: { color: "#1A222D" },
-            pointLabels: { color: "#8B98A8", font: { size: 9, family: "JetBrains Mono" } },
+            angleLines: { color: window.THEME.grid },
+            grid: { color: window.THEME.grid },
+            pointLabels: { color: window.THEME.dim, font: { size: 10 } },
             ticks: { display: false, backdropColor: "transparent" },
             suggestedMin: 0, suggestedMax: 100,
           },
@@ -190,51 +195,60 @@ window.PageComparateur = (() => {
     try {
       const stats = await fetchStatsFor(selected);
       wrap.innerHTML = tableHTML(stats);
-      const radarSection = document.getElementById("compare-radar-section");
-      const toolbar = document.getElementById("compare-toolbar");
       const showExtras = stats.length >= 2;
-      radarSection.style.display = showExtras ? "" : "none";
-      toolbar.style.display = showExtras ? "" : "none";
+      document.getElementById("compare-radar-panel").style.display = showExtras ? "" : "none";
+      document.getElementById("compare-toolbar").style.display = showExtras ? "" : "none";
       if (showExtras) await renderRadar(stats);
     } catch (e) {
       console.error(e);
-      wrap.innerHTML = `<p class="text-red text-sm mt-4">Erreur lors du chargement des statistiques.</p>`;
+      wrap.innerHTML = `<div class="p-5">${window.ui.errorMsg("Erreur lors du chargement des statistiques.")}</div>`;
     }
   }
 
   function renderAll() {
     const root = document.getElementById("page-root");
     root.innerHTML = `
-      <header class="mb-7">
-        <h1 class="text-2xl font-extrabold tracking-tight">Comparateur</h1>
-        <p class="text-muted text-sm mt-1">Compare de 2 à 4 joueurs sur l'ensemble des statistiques.</p>
-      </header>
+      ${window.ui.pageHeader(
+        `Compare de ${MIN_PLAYERS} à ${MAX_PLAYERS} joueurs sur l'ensemble des statistiques.`,
+        `<div id="compare-toolbar" class="flex gap-2" style="display:none">
+           <button id="btn-copy-link" class="btn-outline">${window.icon("link", 15)}Copier le lien</button>
+           <button id="btn-export-img" class="btn-outline">${window.icon("image", 15)}Exporter en image</button>
+         </div>`
+      )}
 
-      <div class="card p-4 relative">
-        <label class="block text-[11px] font-mono uppercase tracking-wider text-muted mb-2">Ajouter un joueur</label>
-        <input id="player-search" type="text" placeholder="Rechercher un pseudo…" autocomplete="off"
-          class="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm outline-none focus:border-enchant transition-colors" />
-        <div id="suggestions" class="hidden absolute z-10 left-4 right-4 mt-1 card max-h-64 overflow-y-auto shadow-card"></div>
-
-        <div class="flex flex-wrap gap-2 mt-4" id="chips">${chipsHTML()}</div>
-      </div>
-
-      <div class="flex items-center justify-between mt-6 mb-2" id="compare-toolbar" style="display:none">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted">Résultats</p>
-        <div class="flex gap-2">
-          <button id="btn-copy-link" class="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-surface2 transition-colors">🔗 Copier le lien</button>
-          <button id="btn-export-img" class="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-surface2 transition-colors">🖼️ Exporter en image</button>
+      <section class="card p-5 mb-4">
+        <div class="relative max-w-md">
+          <span class="absolute left-3 top-1/2 -translate-y-1/2 text-dim pointer-events-none">${window.icon("search", 15)}</span>
+          <input id="player-search" type="text" placeholder="Ajouter un joueur : rechercher un pseudo…" autocomplete="off" aria-label="Ajouter un joueur"
+            class="field !pl-9" />
+          <div id="suggestions" class="hidden absolute z-10 left-0 right-0 mt-1 card max-h-64 overflow-y-auto shadow-xl shadow-black/50"></div>
         </div>
-      </div>
+        <div class="flex flex-wrap gap-2 mt-4" id="chips">${chipsHTML()}</div>
+        <p class="text-[12.5px] text-dim mt-3">Glisse les pastilles pour changer l'ordre des colonnes.</p>
+      </section>
 
-      <div id="compare-export-zone">
-        <div id="compare-table-wrap"></div>
+      <div id="compare-export-zone" class="bg-bg">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+          <section class="card lg:col-span-2 overflow-hidden">
+            <div class="card-head pb-3">
+              <div>
+                <h3 class="card-title">Comparaison</h3>
+                <p class="card-desc">En vert, la meilleure valeur du groupe. Les autres affichent l'écart avec elle.</p>
+              </div>
+            </div>
+            <div id="compare-table-wrap" class="pt-1"></div>
+          </section>
 
-        <section class="mt-8" id="compare-radar-section" style="display:none">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕸️ Profils comparés (toile)</p>
-          <div class="card p-4" style="height:340px"><canvas id="compare-radar"></canvas></div>
-          <p class="text-xs text-muted mt-2">Chaque axe est normalisé par rapport au record du serveur sur cette statistique (100% = meilleur joueur du serveur).</p>
-        </section>
+          <section id="compare-radar-panel" class="card" style="display:none">
+            <div class="card-head">
+              <div>
+                <h3 class="card-title">Profils comparés</h3>
+                <p class="card-desc">100 % = le record du serveur sur chaque statistique.</p>
+              </div>
+            </div>
+            <div class="card-body"><div style="height:340px"><canvas id="compare-radar"></canvas></div></div>
+          </section>
+        </div>
       </div>
     `;
   }
@@ -245,7 +259,7 @@ window.PageComparateur = (() => {
 
     input.addEventListener("input", () => {
       if (selected.length >= MAX_PLAYERS) {
-        suggBox.innerHTML = `<div class="px-3 py-2 text-sm text-muted">Maximum ${MAX_PLAYERS} joueurs.</div>`;
+        suggBox.innerHTML = `<div class="px-3 py-2.5 text-sm text-muted">Maximum ${MAX_PLAYERS} joueurs.</div>`;
         suggBox.classList.remove("hidden");
         return;
       }
@@ -317,25 +331,25 @@ window.PageComparateur = (() => {
     document.getElementById("btn-copy-link").addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(window.location.href);
-        if (window.showToast) window.showToast("Lien copié !", "success");
+        window.showToast("Lien copié", "success");
       } catch (e) {
         console.error(e);
-        if (window.showToast) window.showToast("Impossible de copier le lien", "error");
+        window.showToast("Impossible de copier le lien", "error");
       }
     });
 
     document.getElementById("btn-export-img").addEventListener("click", async () => {
       const zone = document.getElementById("compare-export-zone");
       const btn = document.getElementById("btn-export-img");
-      const originalText = btn.textContent;
+      const originalHTML = btn.innerHTML;
       if (typeof html2canvas !== "function") {
-        if (window.showToast) window.showToast("Export indisponible (html2canvas manquant)", "error");
+        window.showToast("Export indisponible (html2canvas manquant)", "error");
         return;
       }
-      btn.textContent = "⏳ Export…";
+      btn.textContent = "Export en cours…";
       btn.disabled = true;
       try {
-        const canvas = await html2canvas(zone, { backgroundColor: "#0B0F14", scale: 2 });
+        const canvas = await html2canvas(zone, { backgroundColor: "#09090B", scale: 2 });
         const names = selected
           .map((uuid) => (allPlayers.find((p) => p.uuid === uuid) || {}).username || uuid)
           .join("-vs-");
@@ -345,9 +359,9 @@ window.PageComparateur = (() => {
         link.click();
       } catch (e) {
         console.error(e);
-        if (window.showToast) window.showToast("Erreur lors de l'export", "error");
+        window.showToast("Erreur lors de l'export", "error");
       } finally {
-        btn.textContent = originalText;
+        btn.innerHTML = originalHTML;
         btn.disabled = false;
       }
     });

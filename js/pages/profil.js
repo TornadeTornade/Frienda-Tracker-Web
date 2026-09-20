@@ -35,17 +35,21 @@ window.PageProfil = (() => {
   //   - date        : completed_at | unlocked_at | achieved_at
   //   - nom affiché : title | name (sinon dérivé de l'identifiant)
   const ADVANCEMENTS_TABLE = "player_advancements";
-  const ADV_TAB_ICONS = {
-    story: "📖",
-    nether: "🔥",
-    end: "🐉",
-    adventure: "🧭",
-    husbandry: "🌾",
+  // Noms d'icônes Lucide (voir js/icons.js)
+  const ADV_TABS = {
+    story: { label: "Histoire", icon: "📖" },
+    nether: { label: "Nether", icon: "🔥" },
+    end: { label: "End", icon: "🐉" },
+    adventure: { label: "Aventure", icon: "🧭" },
+    husbandry: { label: "Agriculture", icon: "🌾" },
   };
+  
+  const ADV_TAB_ORDER = ["story", "nether", "end", "adventure", "husbandry"];
+  let advOpenTabs = new Set(["story"]); // onglets dépliés
   const ADV_FILTERS = [
     { key: "all", label: "Tous" },
-    { key: "unlocked", label: "🔓 Débloqués" },
-    { key: "locked", label: "🔒 Verrouillés" },
+    { key: "unlocked", label: "Débloqués" },
+    { key: "locked", label: "Verrouillés" },
   ];
   let advFilter = "all";
   let currentAdvancements = [];
@@ -92,6 +96,12 @@ window.PageProfil = (() => {
   function esc(str) {
     return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
+
+  // Étoile pleine (favori) ou vide
+  const starIcon = (on) => window.icon("star", 18).replace('fill="none"', on ? 'fill="currentColor"' : 'fill="none"');
+  // Icône avec couleur explicite : html2canvas sérialise le SVG sans héritage CSS,
+  // donc "currentColor" y serait rendu en noir sur la Player Card exportée.
+  const cardIcon = (name, size, color) => window.icon(name, size).replace(/currentColor/g, color);
 
   async function fetchAllPlayersLight() {
     const { data, error } = await window.sb.from("player_stats").select("uuid, username").order("username");
@@ -163,13 +173,15 @@ window.PageProfil = (() => {
     else if (row.completed !== undefined) unlocked = !!row.completed;
     else if (row.completed_at !== undefined) unlocked = !!row.completed_at;
     const date = row.completed_at ?? row.unlocked_at ?? row.achieved_at ?? null;
-    const tab = String(id).includes("/") ? String(id).split(":").pop().split("/")[0] : "";
+    const path = String(id).split(":").pop();
+    const tab = path.includes("/") ? path.split("/")[0] : "other";
     return {
       id: String(id),
       title: row.advancement_name || row.title || row.name || prettifyAdvancementId(id),
       unlocked,
       date: unlocked ? date : null,
-      icon: ADV_TAB_ICONS[tab] ?? "🏅",
+      tab,
+      icon: ADV_TABS[tab]?.icon ?? "🏅",
     };
   }
 
@@ -238,9 +250,7 @@ window.PageProfil = (() => {
   }
 
   function periodChipsHTML() {
-    return CHART_PERIODS.map(
-      (per) => `<button data-period="${per.key}" class="chip-btn ${per.key === chartPeriod ? "active" : ""}">${per.label}</button>`
-    ).join("");
+    return window.ui.segmented(CHART_PERIODS, chartPeriod, "period", "chart-period-nav");
   }
 
   function computeRadarData(uuid, allStats, mode) {
@@ -266,17 +276,17 @@ window.PageProfil = (() => {
       if (mode === "record") {
         const pct = max > 0 ? Math.round((playerValue / max) * 100) : 0;
         if (max > 0 && playerValue >= max) {
-          deltaText = "🏆 Record";
-          deltaClass = "bg-gold/10 border-gold/40 text-gold";
+          deltaText = "Record";
+          deltaClass = "badge-solid";
         } else {
           deltaText = `${pct}% du record`;
-          deltaClass = "bg-surface2 border-border text-muted";
+          deltaClass = "";
         }
       } else {
         const diffPct = avg > 0 ? Math.round(((playerValue - avg) / avg) * 100) : playerValue > 0 ? 100 : 0;
         const sign = diffPct >= 0 ? "+" : "";
         deltaText = `${sign}${diffPct}% vs moy.`;
-        deltaClass = diffPct >= 0 ? "bg-green/10 border-green/40 text-green" : "bg-red/10 border-red/40 text-red";
+        deltaClass = diffPct >= 0 ? "badge-green" : "badge-red";
       }
 
       rows.push({ cat, playerValue, compareValue, deltaText, deltaClass });
@@ -288,22 +298,25 @@ window.PageProfil = (() => {
   // ---------- Rendu ----------
   function searchBarHTML() {
     return `
-      <div class="card p-4 relative mb-7">
-        <label class="block text-[11px] font-mono uppercase tracking-wider text-muted mb-2">Rechercher un joueur</label>
-        <input id="profil-search" type="text" placeholder="Pseudo exact du joueur…" autocomplete="off"
-          class="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm outline-none focus:border-enchant transition-colors" />
-        <div id="profil-suggestions" class="hidden absolute z-10 left-4 right-4 mt-1 card max-h-64 overflow-y-auto shadow-card"></div>
-      </div>`;
+      <section class="card p-5 mb-4">
+        <div class="relative max-w-md">
+          <span class="absolute left-3 top-1/2 -translate-y-1/2 text-dim pointer-events-none">${window.icon("search", 15)}</span>
+          <input id="profil-search" type="text" placeholder="Pseudo du joueur…" autocomplete="off" aria-label="Rechercher un joueur"
+            class="field !pl-9" />
+          <div id="profil-suggestions" class="hidden absolute z-10 left-0 right-0 mt-1 card max-h-64 overflow-y-auto shadow-xl shadow-black/50"></div>
+        </div>
+        <div id="profil-favorites"></div>
+      </section>`;
   }
 
   function emptyStateHTML() {
-    return `<p class="text-muted text-sm">Recherche un pseudo ci-dessus pour afficher son profil complet.</p>`;
+    return `<div class="card">${window.ui.empty("Recherche un pseudo ci-dessus pour afficher son profil complet.", "user")}</div>`;
   }
 
   function cardStatChipsHTML() {
     return visibleCategories().map((c) => {
       const active = cardSelectedKeys.includes(c.key);
-      return `<button data-cardkey="${c.key}" class="chip-btn ${active ? "active" : ""}">${c.icon} ${c.short}</button>`;
+      return `<button data-cardkey="${c.key}" class="chip-btn ${active ? "active" : ""}">${window.catIcon(c, 14)}${c.short}</button>`;
     }).join("");
   }
 
@@ -312,17 +325,17 @@ window.PageProfil = (() => {
     return rows
       .map(
         ({ cat, playerValue, compareValue, deltaText, deltaClass }) => `
-        <div class="flex items-center gap-3 px-4 py-3">
-          <span class="w-9 h-9 rounded-md bg-bg shadow-slot flex items-center justify-center text-base shrink-0">${cat.icon}</span>
+        <div class="flex items-center gap-3 px-5 py-3">
+          <span class="stat-icon sm">${window.catIcon(cat, 13)}</span>
           <div class="min-w-0 flex-1">
-            <p class="text-[11px] text-muted truncate">${cat.label}</p>
-            <p class="font-mono font-bold text-sm text-ink">${window.fmt.statValue(cat.key, playerValue)}</p>
+            <p class="text-[12.5px] text-muted truncate">${cat.label}</p>
+            <p class="font-mono font-semibold text-sm">${window.fmt.statValue(cat.key, playerValue)}</p>
           </div>
-          <div class="text-right shrink-0 hidden sm:block">
-            <p class="text-[10px] font-mono text-muted uppercase">${refLabel}</p>
-            <p class="font-mono text-xs text-muted">${window.fmt.statValue(cat.key, compareValue)}</p>
+          <div class="text-right shrink-0 hidden xl:block">
+            <p class="text-[11.5px] text-dim">${refLabel}</p>
+            <p class="font-mono text-[12.5px] text-muted">${window.fmt.statValue(cat.key, compareValue)}</p>
           </div>
-          <span class="shrink-0 text-[11px] font-mono font-bold px-2 py-1 rounded-full border whitespace-nowrap ${deltaClass}">${deltaText}</span>
+          <span class="badge ${deltaClass} shrink-0">${deltaText}</span>
         </div>`
       )
       .join("");
@@ -334,42 +347,78 @@ window.PageProfil = (() => {
     return visibleCategories().map((c) => {
       const rank = rankOf(uuid, c.key, allStats);
       return `
-        <div class="card p-3">
-          <p class="text-[10px] font-mono uppercase text-muted truncate">${c.icon} ${c.short}</p>
-          <p class="font-mono font-bold text-lg">#${rank}<span class="text-muted text-xs font-normal">/${n}</span></p>
+        <div class="tile p-3">
+          <p class="text-[12.5px] text-muted truncate flex items-center gap-1.5">${window.catIcon(c, 13)}${c.short}</p>
+          <p class="font-mono font-semibold text-lg mt-0.5 ${rank === 1 ? "text-ink" : ""}">#${rank}<span class="text-dim text-xs font-normal"> sur ${n}</span></p>
         </div>`;
     }).join("");
   }
 
   // ---------- Succès : rendu ----------
-  function advancementFilterChipsHTML() {
+  
+    function advancementFilterChipsHTML() {
     return ADV_FILTERS.map(
       (f) => `<button data-advfilter="${f.key}" class="chip-btn ${f.key === advFilter ? "active" : ""}">${f.label}</button>`
     ).join("");
   }
 
-  function advancementsGridHTML(advs, filter) {
-    const list = advs.filter((a) => (filter === "unlocked" ? a.unlocked : filter === "locked" ? !a.unlocked : true));
-    if (!list.length) {
-      return `<p class="text-sm text-muted py-4 text-center col-span-full">Aucun succès dans cette catégorie.</p>`;
-    }
-    return list
-      .map((a) => {
-        const dateLabel = a.unlocked && a.date
-          ? new Date(a.date).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" })
-          : a.unlocked
-          ? "Débloqué"
-          : "Verrouillé";
+  function advBadgeHTML(a) {
+    const dateLabel = a.unlocked && a.date
+      ? new Date(a.date).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" })
+      : a.unlocked ? "Débloqué" : "Verrouillé";
+    return `
+      <div class="card p-3 flex items-center gap-3 ${a.unlocked ? "border-gold/40" : "opacity-50 grayscale"}" title="${esc(a.id)}">
+        <span class="w-9 h-9 rounded-md bg-bg shadow-slot flex items-center justify-center text-base shrink-0">${a.unlocked ? a.icon : "🔒"}</span>
+        <div class="min-w-0 flex-1">
+          <p class="text-xs font-bold truncate ${a.unlocked ? "text-ink" : "text-muted"}">${esc(a.title)}</p>
+          <p class="text-[10px] font-mono ${a.unlocked ? "text-gold" : "text-muted"}">${dateLabel}</p>
+        </div>
+      </div>`;
+  }
+
+  function advancementGroups(advs) {
+    const map = new Map();
+    advs.forEach((a) => {
+      if (!map.has(a.tab)) map.set(a.tab, []);
+      map.get(a.tab).push(a);
+    });
+    const rank = (k) => { const i = ADV_TAB_ORDER.indexOf(k); return i === -1 ? 99 : i; };
+    return [...map.keys()]
+      .sort((x, y) => rank(x) - rank(y) || x.localeCompare(y))
+      .map((key) => ({
+        key,
+        meta: ADV_TABS[key] ?? { label: key === "other" ? "Autres" : prettifyAdvancementId(key), icon: "🏅" },
+        items: map.get(key),
+      }));
+  }
+
+  // Un bloc repliable par onglet, avec sa propre progression
+  function advancementsListHTML(advs, filter) {
+    const html = advancementGroups(advs)
+      .map(({ key, meta, items }) => {
+        const total = items.length;
+        const done = items.filter((a) => a.unlocked).length;
+        const pct = Math.round((done / total) * 100);
+        const shown = items.filter((a) => (filter === "unlocked" ? a.unlocked : filter === "locked" ? !a.unlocked : true));
+        if (!shown.length && filter !== "all") return "";
         return `
-        <div class="card p-3 flex items-center gap-3 ${a.unlocked ? "border-gold/40" : "opacity-50 grayscale"}" title="${esc(a.id)}">
-          <span class="w-9 h-9 rounded-md bg-bg shadow-slot flex items-center justify-center text-base shrink-0">${a.unlocked ? a.icon : "🔒"}</span>
-          <div class="min-w-0 flex-1">
-            <p class="text-xs font-bold truncate ${a.unlocked ? "text-ink" : "text-muted"}">${esc(a.title)}</p>
-            <p class="text-[10px] font-mono ${a.unlocked ? "text-gold" : "text-muted"}">${dateLabel}</p>
+        <details data-advtab="${esc(key)}" ${advOpenTabs.has(key) ? "open" : ""} class="card overflow-hidden">
+          <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+            <span class="text-lg">${meta.icon}</span>
+            <span class="font-bold text-sm">${esc(meta.label)}</span>
+            <span class="ml-auto font-mono text-xs ${done === total ? "text-gold" : "text-muted"}">${done}/${total}</span>
+            <div class="w-20 h-1.5 rounded-full bg-bg shadow-slot overflow-hidden hidden sm:block">
+              <div class="h-full bg-gold" style="width:${pct}%"></div>
+            </div>
+            <span class="text-muted text-xs">▾</span>
+          </summary>
+          <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 p-4 border-t border-border">
+            ${shown.map(advBadgeHTML).join("")}
           </div>
-        </div>`;
+        </details>`;
       })
       .join("");
+    return html || `<p class="text-sm text-muted py-4 text-center">Aucun succès dans cette catégorie.</p>`;
   }
 
   function advancementsSectionHTML(advs) {
@@ -397,9 +446,11 @@ window.PageProfil = (() => {
             <div class="h-full bg-gold" style="width:${pct}%"></div>
           </div>
         </div>
-        <div id="adv-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">${advancementsGridHTML(advs, advFilter)}</div>
+        <div id="adv-list" class="space-y-3">${advancementsListHTML(advs, advFilter)}</div>
       </section>`;
   }
+
+  
 
   async function profileHTML(p, allStats, sessions, sessionsCount, advancements) {
     const online = await isOnline(p.uuid);
@@ -410,173 +461,165 @@ window.PageProfil = (() => {
     const xpLevelText = p.xp_level != null ? window.fmt.int(p.xp_level) : "N/A";
     const lastSeenBadge =
       !online && sessions.length
-        ? `<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border text-muted">
-            🕓 Dernière connexion : ${window.fmt.timeAgo(sessions[0].joined_at)}
-          </span>`
+        ? window.ui.badge(`Dernière connexion ${window.fmt.timeAgo(sessions[0].joined_at)}`, "", "history")
         : "";
     const { avgSeconds, longestSeconds } = summarizeSessions(sessions);
     const summaryNote =
       sessionsCount != null && sessionsCount > sessions.length
-        ? `<p class="text-[11px] text-muted mb-3">Moyenne et record calculés sur les ${sessions.length} dernières sessions (${sessionsCount} au total).</p>`
+        ? `<p class="text-[12.5px] text-dim mb-3">Moyenne et record calculés sur les ${sessions.length} dernières sessions (${sessionsCount} au total).</p>`
         : "";
+    const n = allStats.length || 1;
+    const quick = ["playtime_seconds", "player_kills", "blocks_broken", "distance_meters"].map((key) => {
+      const cat = window.statByKey(key);
+      return `
+        <div class="min-w-0">
+          <p class="text-[12.5px] text-muted flex items-center gap-1.5 truncate">${window.catIcon(cat, 13)}${cat.short}</p>
+          <p class="font-mono font-semibold text-lg mt-0.5 truncate">${window.fmt.statValue(key, p[key])}</p>
+          <p class="text-[11.5px] text-dim">#${rankOf(p.uuid, key, allStats)} sur ${n}</p>
+        </div>`;
+    }).join("");
+
     return `
-      <div class="card p-6 flex flex-col sm:flex-row items-center gap-6 mb-6">
-        <div class="flex-1 min-w-0 w-full flex flex-col sm:flex-row items-center sm:items-start gap-4 text-center sm:text-left">
-          <img src="${window.avatarHead(p.uuid, 64)}" class="w-16 h-16 rounded-md shadow-slot shrink-0" alt="" />
-          <div class="min-w-0">
-            <div class="flex items-center gap-2 justify-center sm:justify-start">
-              <h2 class="text-xl font-extrabold truncate">${esc(p.username)}</h2>
-              <button id="fav-toggle-btn" class="shrink-0 text-lg leading-none transition-colors ${
-                fav ? "text-gold" : "text-muted hover:text-gold"
-              }" title="${fav ? "Retirer des favoris" : "Ajouter aux favoris"}">${fav ? "★" : "☆"}</button>
-              <button id="share-profile-btn" class="shrink-0 text-muted hover:text-ink transition-colors text-sm" title="Copier le lien du profil">🔗</button>
-            </div>
-            <p class="text-muted text-xs font-mono mt-1 truncate">${p.uuid}</p>
-            <div class="flex items-center gap-2 mt-3 justify-center sm:justify-start flex-wrap">
-              <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border ${
-                online ? "bg-green/10 border-green/40 text-green" : "bg-surface2 border-border text-muted"
-              }">
-                <span class="w-1.5 h-1.5 rounded-full ${online ? "bg-green live-dot" : "bg-muted"}"></span>
-                ${online ? "En ligne" : "Hors ligne"}
-              </span>
-              <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border ${
-                p.xp_level != null ? "text-ink" : "text-muted"
-              }">
-                ⭐ Niveau XP : ${xpLevelText}
-              </span>
-              <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border bg-surface2 border-border text-muted">
-                🗓️ Membre depuis : ${memberSince}
-              </span>
-              ${lastSeenBadge}
-            </div>
-          </div>
-        </div>
-        <div class="shrink-0 w-full sm:w-[220px] h-[280px] rounded-lg bg-bg shadow-slot overflow-hidden cursor-grab active:cursor-grabbing">
-          <canvas id="profil-skin-3d" width="220" height="280" class="w-full h-full"></canvas>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-8">
-        ${visibleCategories().map(
-          (c) => `
-          <div class="card p-3">
-            <p class="text-[10px] font-mono uppercase text-muted truncate">${c.icon} ${c.short}</p>
-            <p class="font-mono font-bold text-lg">${window.fmt.statValue(c.key, p[c.key])}</p>
-          </div>`
-        ).join("")}
-      </div>
-
-      <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">📈 Évolution</p>
-
-        <div class="card p-4 mb-4">
-          <div class="flex flex-col sm:flex-row sm:items-stretch gap-4 sm:gap-5">
-            <div class="flex-1 min-w-0">
-              <p class="text-[10px] font-mono uppercase tracking-wider text-muted mb-2">Statistique</p>
-              <div class="flex flex-wrap gap-2" id="chart-cat-nav">
-                ${evolutionCategories().map(
-                  (c) => `<button data-key="${c.key}" class="chip-btn ${c.key === chartStatKey ? "active" : ""}">${c.icon} ${c.short}</button>`
-                ).join("")}
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        <section class="card lg:col-span-2 p-6 flex flex-col">
+          <div class="flex flex-col sm:flex-row items-center sm:items-start gap-5 text-center sm:text-left">
+            <img src="${window.avatarHead(p.uuid, 128)}" width="64" height="64" class="w-16 h-16 rounded-lg bg-surface2 shrink-0" alt="" />
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5 justify-center sm:justify-start">
+                <h2 class="text-xl font-semibold tracking-tight truncate">${esc(p.username)}</h2>
+                <button id="fav-toggle-btn" class="shrink-0 p-1.5 rounded-md hover:bg-surface2 transition-colors ${fav ? "text-ink" : "text-dim hover:text-ink"}"
+                  title="${fav ? "Retirer des favoris" : "Ajouter aux favoris"}" aria-label="${fav ? "Retirer des favoris" : "Ajouter aux favoris"}">${starIcon(fav)}</button>
+                <button id="share-profile-btn" class="shrink-0 p-1.5 rounded-md text-dim hover:text-ink hover:bg-surface2 transition-colors" title="Copier le lien du profil" aria-label="Copier le lien du profil">${window.icon("link", 17)}</button>
+              </div>
+              <p class="text-dim text-xs mt-0.5 truncate">${p.uuid}</p>
+              <div class="flex items-center gap-2 mt-3 justify-center sm:justify-start flex-wrap">
+                <span class="badge ${online ? "badge-green" : ""}">
+                  <span class="w-1.5 h-1.5 rounded-full ${online ? "bg-green live-dot" : "bg-dim"}"></span>${online ? "En ligne" : "Hors ligne"}
+                </span>
+                ${window.ui.badge(`Niveau XP ${xpLevelText}`, "", "star")}
+                ${window.ui.badge(`Membre depuis le ${memberSince}`, "", "calendar")}
+                ${lastSeenBadge}
               </div>
             </div>
-            <div class="hidden sm:block w-px bg-border shrink-0"></div>
-            <div class="sm:w-[240px] shrink-0">
-              <p class="text-[10px] font-mono uppercase tracking-wider text-muted mb-2">Période</p>
-              <div class="flex flex-wrap gap-2" id="chart-period-nav">${periodChipsHTML()}</div>
-            </div>
           </div>
-        </div>
-        <div class="card p-4">
-          <p id="evo-empty" class="hidden text-sm text-muted py-6 text-center">Pas encore assez de données historiques sur cette période pour tracer une courbe.</p>
-          <canvas id="evo-chart" height="90"></canvas>
-        </div>
-      </section>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-5 mt-6 pt-6 border-t border-border">${quick}</div>
+        </section>
 
-      <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">📊 Classement du joueur</p>
-        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">${rankGridHTML(p.uuid, allStats)}</div>
-      </section>
-
-      <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕸️ Profil vs moyenne du serveur</p>
-        <div class="card p-4 mb-4">
-          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <p class="text-sm text-muted">Comparaison du joueur sur 6 statistiques clés du serveur.</p>
-            <div class="flex flex-wrap gap-2" id="radar-mode-nav">
-              <button data-mode="avg" class="chip-btn ${radarMode === "avg" ? "active" : ""}">📊 Moyenne serveur</button>
-              <button data-mode="record" class="chip-btn ${radarMode === "record" ? "active" : ""}">🏆 Record serveur</button>
-            </div>
+        <section class="card p-3">
+          <div class="w-full h-[300px] rounded-lg bg-bg overflow-hidden cursor-grab active:cursor-grabbing">
+            <canvas id="profil-skin-3d" width="320" height="300" class="w-full h-full"></canvas>
           </div>
-        </div>
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div class="card p-4" style="height:340px"><canvas id="profil-radar"></canvas></div>
-          <div class="card divide-y divide-border" id="radar-breakdown"></div>
-        </div>
-      </section>
+        </section>
+      </div>
+
+      ${window.ui.panel({
+        title: "Statistiques",
+        desc: "Toutes les statistiques de ce joueur.",
+        cls: "mb-4",
+        body: `<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          ${visibleCategories().map(
+            (c) => `
+            <div class="tile p-3">
+              <p class="text-[12.5px] text-muted truncate flex items-center gap-1.5">${window.catIcon(c, 13)}${c.short}</p>
+              <p class="font-mono font-semibold text-lg mt-0.5">${window.fmt.statValue(c.key, p[c.key])}</p>
+            </div>`
+          ).join("")}
+        </div>`,
+      })}
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4 items-start">
+        ${window.ui.panel({
+          title: "Évolution",
+          desc: "Historique de la statistique choisie.",
+          cls: "lg:col-span-2",
+          action: periodChipsHTML(),
+          body: `
+            <div class="flex flex-wrap gap-1.5 mb-5" id="chart-cat-nav">
+              ${evolutionCategories().map(
+                (c) => `<button data-key="${c.key}" class="chip-btn ${c.key === chartStatKey ? "active" : ""}">${window.catIcon(c, 14)}${c.short}</button>`
+              ).join("")}
+            </div>
+            <div style="height:300px">
+              <canvas id="evo-chart"></canvas>
+            </div>
+            <div id="evo-empty" class="hidden">${window.ui.empty("Pas encore assez de données historiques sur cette période pour tracer une courbe.", "chart-line")}</div>`,
+        })}
+
+        ${window.ui.panel({
+          title: "Profil vs serveur",
+          desc: "Six statistiques clés. 100 % = record du serveur.",
+          action: window.ui.segmented([{ key: "avg", label: "Moyenne" }, { key: "record", label: "Record" }], radarMode, "mode", "radar-mode-nav"),
+          body: `<div style="height:300px"><canvas id="profil-radar"></canvas></div>`,
+        })}
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4 items-start">
+        ${window.ui.panel({
+          title: "Classement du joueur",
+          desc: "Sa place sur le serveur, catégorie par catégorie.",
+          cls: "lg:col-span-2",
+          body: `<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">${rankGridHTML(p.uuid, allStats)}</div>`,
+        })}
+        ${window.ui.panel({
+          title: "Écart avec le serveur",
+          desc: "Sur les six statistiques du graphique.",
+          bodyCls: "!p-0 pt-1",
+          body: `<div class="divide-rows" id="radar-breakdown"></div>`,
+        })}
+      </div>
 
       ${advancementsSectionHTML(advancements)}
 
-      <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🃏 Player Card</p>
-        <div class="card p-5">
-          <div class="grid grid-cols-1 lg:grid-cols-[1fr_220px] gap-6 items-start">
-            <div>
-              <p class="text-sm text-muted mb-3">
-                Choisis jusqu'à ${MAX_CARD_STATS} statistiques à afficher sur la carte
-                (<span class="text-ink font-medium" id="card-count">0</span>/${MAX_CARD_STATS} sélectionnée(s)).
-              </p>
-              <div class="flex flex-wrap gap-2 mb-5" id="card-stat-nav">${cardStatChipsHTML()}</div>
-              <button id="gen-card-btn" class="chip-btn active !bg-gradient-to-b !from-enchant !to-enchant2 !px-5 !py-2.5">
-                ⬇️ Télécharger la Player Card
-              </button>
-              <p class="text-[11px] text-muted mt-2">L'aperçu à droite est à l'échelle — le fichier téléchargé est en haute résolution.</p>
-            </div>
-            <div class="mx-auto lg:mx-0">
-              <p class="text-[10px] font-mono uppercase tracking-wider text-muted mb-2 text-center lg:text-left">Aperçu</p>
-              <div class="relative shrink-0 rounded-[20px] overflow-hidden shadow-card" style="width:220px;aspect-ratio:3/4;">
-                <div id="player-card-preview-inner" style="width:380px;aspect-ratio:3/4;transform-origin:top left;transform:scale(0.5789);"></div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+        ${window.ui.panel({
+          title: "Player Card",
+          desc: `Choisis jusqu'à ${MAX_CARD_STATS} statistiques à afficher sur la carte.`,
+          body: `
+            <div class="flex flex-col sm:flex-row gap-6 items-start">
+              <div class="flex-1 min-w-0">
+                <p class="text-[12.5px] text-muted mb-3"><span class="text-ink font-medium" id="card-count">0</span> sur ${MAX_CARD_STATS} sélectionnée(s)</p>
+                <div class="flex flex-wrap gap-1.5 mb-5" id="card-stat-nav">${cardStatChipsHTML()}</div>
+                <button id="gen-card-btn" class="btn">${window.icon("download", 15)}Télécharger la Player Card</button>
+                <p class="text-[12px] text-dim mt-2">L'aperçu est à l'échelle. Le fichier téléchargé est en haute résolution.</p>
               </div>
-            </div>
-          </div>
-        </div>
-      </section>
+              <div class="mx-auto sm:mx-0 shrink-0">
+                <div class="relative rounded-[20px] overflow-hidden border border-border" style="width:220px;aspect-ratio:3/4;">
+                  <div id="player-card-preview-inner" style="width:380px;aspect-ratio:3/4;transform-origin:top left;transform:scale(0.5789);"></div>
+                </div>
+              </div>
+            </div>`,
+        })}
 
-      <section>
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🕑 Historique de connexions</p>
-        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
-          <div class="card p-3">
-            <p class="text-[10px] font-mono uppercase text-muted truncate">📅 Sessions totales</p>
-            <p class="font-mono font-bold text-lg">${sessionsCount != null ? window.fmt.int(sessionsCount) : "—"}</p>
-          </div>
-          <div class="card p-3">
-            <p class="text-[10px] font-mono uppercase text-muted truncate">⏱️ Durée moyenne</p>
-            <p class="font-mono font-bold text-lg">${avgSeconds ? window.fmt.duration(avgSeconds) : "—"}</p>
-          </div>
-          <div class="card p-3">
-            <p class="text-[10px] font-mono uppercase text-muted truncate">🔥 Session la + longue</p>
-            <p class="font-mono font-bold text-lg">${longestSeconds ? window.fmt.duration(longestSeconds) : "—"}</p>
-          </div>
-        </div>
-        ${summaryNote}
-        <div id="sessions-list" class="card divide-y divide-border">${sessionsListHTML(sessions)}</div>
-      </section>
+        ${window.ui.panel({
+          title: "Historique de connexions",
+          desc: "Les 25 dernières sessions.",
+          body: `
+            <div class="grid grid-cols-3 gap-3 mb-4">
+              <div class="tile p-3"><p class="text-[12.5px] text-muted truncate">Sessions</p><p class="font-mono font-semibold text-lg mt-0.5">${sessionsCount != null ? window.fmt.int(sessionsCount) : "–"}</p></div>
+              <div class="tile p-3"><p class="text-[12.5px] text-muted truncate">Durée moyenne</p><p class="font-mono font-semibold text-lg mt-0.5">${avgSeconds ? window.fmt.duration(avgSeconds) : "–"}</p></div>
+              <div class="tile p-3"><p class="text-[12.5px] text-muted truncate">Plus longue</p><p class="font-mono font-semibold text-lg mt-0.5">${longestSeconds ? window.fmt.duration(longestSeconds) : "–"}</p></div>
+            </div>
+            ${summaryNote}
+            <div id="sessions-list" class="tile divide-rows max-h-[320px] overflow-y-auto">${sessionsListHTML(sessions)}</div>`,
+        })}
+      </div>
     `;
   }
 
   function sessionsListHTML(sessions) {
-    if (!sessions.length) return `<p class="p-4 text-sm text-muted">Aucune session enregistrée pour l'instant.</p>`;
+    if (!sessions.length) return window.ui.empty("Aucune session enregistrée pour l'instant.", "history");
     return sessions
       .map((s) => {
         const duration = s.left_at
           ? window.fmt.duration((new Date(s.left_at) - new Date(s.joined_at)) / 1000)
-          : "en cours…";
+          : "en cours";
         return `
-        <div class="flex items-center justify-between px-4 py-3 text-sm">
-          <div class="flex items-center gap-2">
-            <span class="${s.left_at ? "text-muted" : "text-green"}">${s.left_at ? "●" : "🟢"}</span>
+        <div class="flex items-center justify-between px-4 py-2.5 text-sm">
+          <div class="flex items-center gap-2.5">
+            <span class="w-1.5 h-1.5 rounded-full ${s.left_at ? "bg-border2" : "bg-green live-dot"}"></span>
             <span>${window.fmt.dateTime(s.joined_at)}</span>
           </div>
-          <span class="font-mono text-xs text-muted">${duration}</span>
+          <span class="text-[12.5px] ${s.left_at ? "text-muted" : "text-green"}">${duration}</span>
         </div>`;
       })
       .join("");
@@ -592,11 +635,11 @@ window.PageProfil = (() => {
     const history = filterHistoryByPeriod(fullHistory, chartPeriod);
 
     if (history.length < 2) {
-      canvas.classList.add("hidden");
+      canvas.parentElement.classList.add("hidden");
       if (emptyMsg) emptyMsg.classList.remove("hidden");
       return;
     }
-    canvas.classList.remove("hidden");
+    canvas.parentElement.classList.remove("hidden");
     if (emptyMsg) emptyMsg.classList.add("hidden");
 
     const cat = window.statByKey(chartStatKey);
@@ -606,6 +649,7 @@ window.PageProfil = (() => {
         ? { day: "2-digit", month: "2-digit", year: "2-digit" }
         : { day: "2-digit", month: "2-digit" };
 
+    const T = window.THEME;
     chartInstance = new Chart(canvas.getContext("2d"), {
       type: "line",
       data: {
@@ -614,47 +658,41 @@ window.PageProfil = (() => {
           {
             label: cat.label,
             data: history.map((h) => h[chartStatKey]),
-            borderColor: "#8B6CF2",
-            backgroundColor: "rgba(139,108,242,.15)",
+            borderColor: T.ink,
+            borderWidth: 1.5,
+            backgroundColor: T.fillSoft,
             fill: true,
             tension: 0.3,
             pointRadius: 0,
-            pointHoverRadius: 5,
-            pointHoverBackgroundColor: "#F2B33D",
-            pointHoverBorderColor: "#0B0F14",
+            pointHoverRadius: 4,
+            pointHoverBackgroundColor: T.ink,
+            pointHoverBorderColor: "#09090B",
             pointHoverBorderWidth: 2,
           },
         ],
       },
       options: {
         responsive: true,
+        maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: "#1A222D",
-            borderColor: "#26313D",
-            borderWidth: 1,
-            titleColor: "#E9EEF3",
-            bodyColor: "#F2B33D",
-            titleFont: { family: "JetBrains Mono", size: 11 },
-            bodyFont: { family: "JetBrains Mono", size: 12, weight: "bold" },
-            padding: 10,
-            displayColors: false,
+            bodyColor: T.ink,
             callbacks: {
               title: (items) => window.fmt.dateTime(history[items[0].dataIndex].recorded_at),
-              label: (item) => `${cat.icon} ${cat.label} : ${window.fmt.statValue(chartStatKey, item.parsed.y)}`,
+              label: (item) => `${cat.label} : ${window.fmt.statValue(chartStatKey, item.parsed.y)}`,
             },
           },
         },
         scales: {
-          x: { ticks: { color: "#8B98A8" }, grid: { color: "#1A222D" } },
+          x: window.axisOpts(),
           y: {
+            ...window.axisOpts(),
             ticks: {
-              color: "#8B98A8",
+              ...window.axisOpts().ticks,
               callback: (value) => window.fmt.statValue(chartStatKey, value),
             },
-            grid: { color: "#1A222D" },
           },
         },
       },
@@ -670,47 +708,34 @@ window.PageProfil = (() => {
     const { chartLabels, chartPlayerData, chartCompareData, rows } = computeRadarData(uuid, allStats, radarMode);
     const compareLabel = radarMode === "record" ? "Record du serveur" : "Moyenne du serveur";
 
+    const T = window.THEME;
     radarInstance = new Chart(canvas.getContext("2d"), {
       type: "radar",
       data: {
         labels: chartLabels,
         datasets: [
-          { label: compareLabel, data: chartCompareData, borderColor: "#8B98A8", backgroundColor: "rgba(139,152,168,.12)", pointRadius: 2 },
+          { label: compareLabel, data: chartCompareData, borderColor: T.dim, borderDash: [4, 3], borderWidth: 1.5, backgroundColor: "transparent", pointRadius: 2, pointBackgroundColor: T.dim },
           {
             label: "Ce joueur",
             data: chartPlayerData,
-            borderColor: "#F2B33D",
-            backgroundColor: "rgba(242,179,61,.25)",
+            borderColor: T.ink,
+            borderWidth: 1.5,
+            backgroundColor: T.fillMid,
             pointRadius: 3,
             pointHoverRadius: 5,
-            pointBackgroundColor: "#F2B33D",
+            pointBackgroundColor: T.ink,
           },
         ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: "nearest", intersect: false },
-        plugins: {
-          legend: {
-            position: "bottom",
-            labels: { color: "#8B98A8", font: { size: 11 }, usePointStyle: true, pointStyle: "circle", boxHeight: 8 },
-          },
-          tooltip: {
-            backgroundColor: "#1A222D",
-            borderColor: "#26313D",
-            borderWidth: 1,
-            titleColor: "#E9EEF3",
-            bodyColor: "#E9EEF3",
-            titleFont: { family: "JetBrains Mono", size: 11 },
-            bodyFont: { family: "JetBrains Mono", size: 12 },
-            padding: 10,
-          },
-        },
+        plugins: { legend: { position: "bottom" } },
         scales: {
           r: {
-            angleLines: { color: "#1A222D" },
-            grid: { color: "#1A222D" },
-            pointLabels: { color: "#8B98A8", font: { size: 10, family: "JetBrains Mono" } },
+            angleLines: { color: T.grid },
+            grid: { color: T.grid },
+            pointLabels: { color: T.dim, font: { size: 10.5 } },
             ticks: { display: false, backdropColor: "transparent" },
             suggestedMin: 0, suggestedMax: 100,
           },
@@ -747,7 +772,7 @@ window.PageProfil = (() => {
       lib = await loadSkinview3DLib();
     } catch (e) {
       console.error("Impossible de charger skinview3d", e);
-      canvas.parentElement.innerHTML = `<div class="w-full h-full flex items-center justify-center text-muted text-xs font-mono px-3 text-center">Skin 3D indisponible (chargement de la librairie impossible)</div>`;
+      canvas.parentElement.innerHTML = `<div class="w-full h-full flex items-center justify-center text-dim text-xs px-3 text-center">Skin 3D indisponible (chargement de la librairie impossible)</div>`;
       return;
     }
 
@@ -758,8 +783,8 @@ window.PageProfil = (() => {
     const rect = liveCanvas.parentElement.getBoundingClientRect();
     skinViewer3D = new lib.SkinViewer({
       canvas: liveCanvas,
-      width: rect.width || 220,
-      height: rect.height || 280,
+      width: rect.width || 320,
+      height: rect.height || 300,
       skin: `https://mc-heads.net/skin/${uuid}`,
     });
     skinViewer3D.autoRotate = false;
@@ -769,15 +794,17 @@ window.PageProfil = (() => {
   }
 
   // ---------- Player Card (export image + aperçu en direct) ----------
+  // Bordure via "border" et non "box-shadow: inset" : html2canvas rend mal les ombres internes
+  // (cadre gris opaque sur l'image exportée).
   function playerCardInnerHTML(p, selectedKeys, globalRank) {
     return `
-      <div style="position:absolute;inset:0;background:linear-gradient(160deg,#1A1030,#0B0F14 55%,#0B0F14);"></div>
-      <div style="position:absolute;inset:0;box-shadow:inset 0 0 0 2px rgba(242,179,61,.5);border-radius:20px;"></div>
+      <div style="position:absolute;inset:0;background:linear-gradient(160deg,#1F1F23,#09090B 55%,#09090B);"></div>
+      <div style="position:absolute;inset:0;border:1px solid rgba(250,250,250,.22);border-radius:20px;box-sizing:border-box;"></div>
       <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;height:100%;padding:22px 18px;">
-        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.1em;color:#F2B33D;">FRIENDA TRACKER</div>
-        <div style="font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:700;color:#F2B33D;margin-top:6px;">#${globalRank}</div>
+        <div style="font-size:12px;font-weight:500;letter-spacing:.02em;color:#A1A1AA;">Frienda Tracker</div>
+        <div style="font-size:36px;font-weight:600;letter-spacing:-.02em;color:#FAFAFA;margin-top:6px;">#${globalRank}</div>
         <img src="${window.avatarBody3D(p.uuid, 190)}" style="height:180px;margin-top:6px;filter:drop-shadow(0 10px 18px rgba(0,0,0,.6));" crossorigin="anonymous" />
-        <div style="font-weight:800;font-size:20px;margin-top:8px;">${esc(p.username)}</div>
+        <div style="font-weight:600;font-size:20px;margin-top:8px;">${esc(p.username)}</div>
         <div style="width:100%;height:1px;background:rgba(255,255,255,.12);margin:14px 0;"></div>
         <div style="display:flex;width:100%;justify-content:space-between;gap:8px;">
           ${selectedKeys
@@ -785,9 +812,9 @@ window.PageProfil = (() => {
               const cat = window.statByKey(key);
               return `
             <div style="flex:1;text-align:center;">
-              <div style="font-size:20px;">${cat.icon}</div>
-              <div style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px;color:#F2B33D;margin-top:2px;">${window.fmt.statValue(cat.key, p[cat.key])}</div>
-              <div style="font-size:9px;color:#8B98A8;text-transform:uppercase;letter-spacing:.05em;margin-top:2px;">${cat.short}</div>
+              <div style="display:flex;justify-content:center;height:20px;">${cardIcon(cat.icon, 20, "#A1A1AA")}</div>
+              <div style="font-weight:600;font-size:14px;color:#FAFAFA;margin-top:4px;">${window.fmt.statValue(cat.key, p[cat.key])}</div>
+              <div style="font-size:10px;color:#A1A1AA;margin-top:2px;">${cat.short}</div>
             </div>`;
             })
             .join("")}
@@ -798,9 +825,9 @@ window.PageProfil = (() => {
 
   function playerCardEmptyPreviewHTML() {
     return `
-      <div style="position:absolute;inset:0;background:linear-gradient(160deg,#1A1030,#0B0F14 55%,#0B0F14);"></div>
-      <div style="position:absolute;inset:0;box-shadow:inset 0 0 0 2px #26313D;border-radius:20px;"></div>
-      <div style="position:relative;z-index:1;display:flex;align-items:center;justify-content:center;height:100%;padding:24px;text-align:center;font-size:13px;color:#8B98A8;">
+      <div style="position:absolute;inset:0;background:linear-gradient(160deg,#1F1F23,#09090B 55%,#09090B);"></div>
+      <div style="position:absolute;inset:0;border:1px solid #27272A;border-radius:20px;box-sizing:border-box;"></div>
+      <div style="position:relative;z-index:1;display:flex;align-items:center;justify-content:center;height:100%;padding:24px;text-align:center;font-size:13px;color:#A1A1AA;">
         Choisis au moins une statistique pour voir l'aperçu
       </div>
     `;
@@ -847,7 +874,7 @@ window.PageProfil = (() => {
       link.download = `frienda-card-${p.username}.png`;
       link.href = canvas.toDataURL("image/png");
       link.click();
-      window.showToast("Player Card téléchargée !", "success");
+      window.showToast("Player Card téléchargée", "success");
     } catch (e) {
       console.error(e);
       window.showToast("Échec de la génération de la carte", "error");
@@ -859,11 +886,11 @@ window.PageProfil = (() => {
     const q = query.trim().toLowerCase();
     if (!q) return "";
     const matches = allPlayers.filter((p) => p.username.toLowerCase().includes(q)).slice(0, 8);
-    if (!matches.length) return `<div class="px-3 py-2 text-sm text-muted">Aucun joueur trouvé.</div>`;
+    if (!matches.length) return `<div class="px-3 py-2.5 text-sm text-muted">Aucun joueur trouvé.</div>`;
     return matches
       .map(
-        (p) => `<button data-pick="${esc(p.username)}" class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface2 text-sm">
-                  <img src="${window.avatarHead(p.uuid, 20)}" class="w-5 h-5 rounded" alt="" />${esc(p.username)}
+        (p) => `<button data-pick="${esc(p.username)}" class="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-surface2 text-sm">
+                  ${window.ui.avatar(p.uuid, 20)}${esc(p.username)}
                 </button>`
       )
       .join("");
@@ -876,11 +903,11 @@ window.PageProfil = (() => {
 
   async function loadProfile(username) {
     const wrap = document.getElementById("profil-content");
-    wrap.innerHTML = window.skeletonRows(3, "h-16");
+    wrap.innerHTML = window.skeletonRows(3, "h-24");
     try {
       const p = await fetchPlayerByUsername(username);
       if (!p) {
-        wrap.innerHTML = `<p class="text-sm text-muted">Aucun joueur ne porte ce pseudo.</p>`;
+        wrap.innerHTML = `<div class="card">${window.ui.empty("Aucun joueur ne porte ce pseudo.", "search")}</div>`;
         return;
       }
       currentPlayer = p;
@@ -896,6 +923,7 @@ window.PageProfil = (() => {
       cardSelectedKeys = bestCategoryKeys(p.uuid, allStats, MAX_CARD_STATS);
       currentAdvancements = advancements;
       advFilter = "all";
+      advOpenTabs = new Set(["story"]);
 
       wrap.innerHTML = await profileHTML(p, allStats, sessions, sessionsCount, advancements);
       updateCardCountLabel();
@@ -907,10 +935,11 @@ window.PageProfil = (() => {
         toggleFavorite(p.username);
         const nowFav = isFavorite(p.username);
         const btn = e.currentTarget;
-        btn.textContent = nowFav ? "★" : "☆";
-        btn.classList.toggle("text-gold", nowFav);
-        btn.classList.toggle("text-muted", !nowFav);
+        btn.innerHTML = starIcon(nowFav);
+        btn.classList.toggle("text-ink", nowFav);
+        btn.classList.toggle("text-dim", !nowFav);
         btn.title = nowFav ? "Retirer des favoris" : "Ajouter aux favoris";
+        btn.setAttribute("aria-label", btn.title);
         renderFavoritesRow();
       });
 
@@ -918,7 +947,7 @@ window.PageProfil = (() => {
         const url = profileShareUrl(p.username);
         try {
           await navigator.clipboard.writeText(url);
-          window.showToast("Lien du profil copié !", "success");
+          window.showToast("Lien du profil copié", "success");
         } catch (err) {
           window.showToast("Impossible de copier le lien", "error");
         }
@@ -948,17 +977,24 @@ window.PageProfil = (() => {
         renderProfileRadar(p.uuid, allStats);
       });
 
-      // Filtre des succès (Tous / Débloqués / Verrouillés) — la nav n'existe que s'il y a des succès
+            // Filtre + dépliage des succès
       const advNav = document.getElementById("adv-filter-nav");
-      if (advNav) {
+      const advList = document.getElementById("adv-list");
+      if (advNav && advList) {
         advNav.addEventListener("click", (e) => {
           const btn = e.target.closest("button[data-advfilter]");
           if (!btn) return;
           advFilter = btn.dataset.advfilter;
           window.$$("#adv-filter-nav .chip-btn").forEach((b) => b.classList.toggle("active", b === btn));
-          const grid = document.getElementById("adv-grid");
-          if (grid) grid.innerHTML = advancementsGridHTML(currentAdvancements, advFilter);
+          advList.innerHTML = advancementsListHTML(currentAdvancements, advFilter);
         });
+        // "toggle" ne remonte pas dans le DOM : on l'écoute en phase de capture
+        advList.addEventListener("toggle", (e) => {
+          const key = e.target?.dataset?.advtab;
+          if (key == null) return;
+          if (e.target.open) advOpenTabs.add(key);
+          else advOpenTabs.delete(key);
+        }, true);
       }
 
       document.getElementById("card-stat-nav").addEventListener("click", (e) => {
@@ -985,19 +1021,15 @@ window.PageProfil = (() => {
       renderChart(p.uuid);
     } catch (e) {
       console.error(e);
-      wrap.innerHTML = `<p class="text-red text-sm">Erreur lors du chargement du profil.</p>`;
+      wrap.innerHTML = `<div class="card p-5">${window.ui.errorMsg("Erreur lors du chargement du profil.")}</div>`;
     }
   }
 
   function renderAll() {
     const root = document.getElementById("page-root");
     root.innerHTML = `
-      <header class="mb-2">
-        <h1 class="text-2xl font-extrabold tracking-tight">Profils</h1>
-        <p class="text-muted text-sm mt-1">Toutes les informations d'un joueur, en détail.</p>
-      </header>
+      ${window.ui.pageHeader("Toutes les informations d'un joueur, en détail.")}
       ${searchBarHTML()}
-      <div id="profil-favorites"></div>
       <div id="profil-content">${emptyStateHTML()}</div>
     `;
   }
@@ -1006,12 +1038,12 @@ window.PageProfil = (() => {
     const favs = getFavorites();
     if (!favs.length) return "";
     return `
-      <div class="flex items-center gap-2 flex-wrap mb-6">
-        <span class="text-[10px] font-mono uppercase tracking-wider text-muted mr-1 shrink-0">⭐ Favoris :</span>
+      <div class="flex items-center gap-2 flex-wrap mt-4">
+        <span class="lbl inline-flex items-center gap-1.5 mr-1 shrink-0">${window.icon("star", 14)}Favoris</span>
         ${favs
           .map(
-            (u) => `<button data-fav-pick="${esc(u)}" class="chip-btn !py-1.5 !px-2.5 flex items-center gap-1.5">
-                      <img src="${window.avatarHead(u, 16)}" class="w-4 h-4 rounded" alt="" />${esc(u)}
+            (u) => `<button data-fav-pick="${esc(u)}" class="chip-btn">
+                      <img src="${window.avatarHead(u, 32)}" width="16" height="16" class="w-4 h-4 rounded-sm" alt="" />${esc(u)}
                     </button>`
           )
           .join("")}

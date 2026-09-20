@@ -11,18 +11,16 @@ window.PageServerStats = (() => {
   // comparé au record du serveur sur chacune d'elles.
   const PROFILE_KEYS = ["playtime_seconds", "player_kills", "mob_kills", "blocks_broken", "distance_meters", "jumps"];
 
-  const CHART_COLORS = {
-    enchant: "#8B6CF2",
-    enchant2: "#6D4FE0",
-    gold: "#F2B33D",
-    green: "#48D982",
-    red: "#F2545B",
-    silver: "#B9C2CC",
-    bronze: "#C97A4A",
-    muted: "#8B98A8",
-    grid: "#1A222D",
+
+  const T = window.THEME;
+  const BAR = "#52525B"; // barres neutres : seul le maximum passe en blanc
+
+  // Couleurs par barre : la valeur la plus haute ressort, le reste reste discret.
+  const highlightMax = (values) => {
+    const max = Math.max(0, ...values);
+    return values.map((v) => (max > 0 && v === max ? T.ink : BAR));
   };
-  const MEDAL_COLORS = [CHART_COLORS.gold, CHART_COLORS.silver, CHART_COLORS.bronze];
+
 
   // Nouvelle table des matières : la page ne raconte plus "voici des
   // cartes", elle raconte "voici le pouls du serveur, puis ses joueurs, ses
@@ -99,82 +97,54 @@ window.PageServerStats = (() => {
     return Object.values(lastByUuid);
   }
 
+
   // ---------------------------------------------------------------
   // Petits composants
   // ---------------------------------------------------------------
   function periodNavHTML() {
-    return PERIODS.map(
-      (p) => `<button data-period="${p.key}" class="chip-btn ${p.key === activePeriod ? "active" : ""}">${p.label}</button>`
-    ).join("");
+    return window.ui.segmented(PERIODS, activePeriod, "period", "period-nav");
   }
 
-  function periodBadge(kind) {
-    if (kind === "period") {
-      return `<span class="ml-2 align-middle text-[9px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-enchant/15 text-enchant border border-enchant/30">Période</span>`;
-    }
-    return `<span class="ml-2 align-middle text-[9px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-surface2 text-muted border border-border">All-time</span>`;
+  // Étiquette de portée : indique si un bloc suit le sélecteur de période ou non.
+  function scopeBadge(kind) {
+    return kind === "period" ? window.ui.badge("Sur la période", "solid") : window.ui.badge("Depuis toujours");
   }
 
-  function sectionTitle(icon, text, badgeKind, caption) {
+  function sectionHeader(title, badgeKind, caption) {
     return `
-      <div class="mb-3">
-        <div class="flex items-center gap-2.5">
-          <div class="stat-icon sm">${icon}</div>
-          <p class="font-sans text-[15px] font-bold text-ink leading-tight">${text}${badgeKind ? periodBadge(badgeKind) : ""}</p>
+      <div class="mb-4">
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <h2 class="text-base font-semibold tracking-tight">${title}</h2>
+          ${badgeKind ? scopeBadge(badgeKind) : ""}
         </div>
-        ${caption ? `<p class="text-xs text-muted mt-1 ml-[38px]">${caption}</p>` : ""}
-      </div>`;
-  }
-
-  // Sous-en-tête discret DANS une section (ex: "En bref" avant les stat
-  // cards, "Quand est-ce que ça joue ?" avant les graphiques d'horaires) —
-  // pour donner un fil de lecture au lieu d'un mur de cartes identiques.
-  function subHeading(text) {
-    return `<p class="text-[10px] font-mono uppercase tracking-widest text-muted/70 mb-2 mt-6 first:mt-0">${text}</p>`;
-  }
-
-  function statCard(icon, label, value, sub, badgeKind) {
-    return `
-      <div class="card p-4">
-        <div class="flex items-center gap-2.5 mb-2">
-          <div class="stat-icon">${icon}</div>
-          <p class="font-sans text-[13px] font-semibold text-muted leading-tight">${label}${badgeKind ? periodBadge(badgeKind) : ""}</p>
-        </div>
-        <p class="font-mono font-extrabold text-2xl">${value}</p>
-        ${sub ? `<p class="text-xs mt-1">${sub}</p>` : ""}
+        ${caption ? `<p class="text-[13px] text-muted mt-1.5 max-w-3xl">${caption}</p>` : ""}
       </div>`;
   }
 
   // Tuile de record : pas de graphique, juste icône + nombre. Un total
-  // cumulé (ex: "12 480 sauts") n'a rien à comparer visuellement — un bar
-  // chart pour ça n'ajoutait rien qu'un gros nombre en gras ne dit déjà.
-  function recordTile(icon, label, value) {
+  // cumulé (ex: "12 480 sauts") n'a rien à comparer visuellement.
+  function recordTile(cat, value) {
     return `
       <div class="card p-4 flex items-center gap-3">
-        <div class="stat-icon shrink-0">${icon}</div>
+        <span class="stat-icon">${window.catIcon(cat, 16)}</span>
         <div class="min-w-0">
-          <p class="text-[10px] font-mono uppercase tracking-wider text-muted truncate">${label}</p>
-          <p class="font-mono font-extrabold text-xl text-ink truncate">${value}</p>
+          <p class="text-[12.5px] text-muted truncate">${cat.short}</p>
+          <p class="font-mono font-semibold text-lg truncate">${value}</p>
         </div>
       </div>`;
   }
 
   function chartCard(id, title, caption, height = 220) {
-    return `
-      <div class="card p-4">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted">${title}</p>
-        <p class="text-[11px] text-muted/70 mb-3 min-h-[14px]">${caption ?? ""}</p>
-        <div style="height:${height}px"><canvas id="${id}"></canvas></div>
-      </div>`;
-  }
-
-  function emptyStateHTML(msg) {
-    return `<div class="h-full flex items-center justify-center min-h-[100px]"><p class="text-sm text-muted text-center px-6">${msg}</p></div>`;
+    return window.ui.panel({
+      title,
+      desc: caption,
+      body: `<div style="height:${height}px"><canvas id="${id}"></canvas></div>`,
+    });
   }
 
   function renderEmptyIfNeeded(canvas, condition, msg) {
     if (!condition) return false;
-    canvas.parentElement.innerHTML = emptyStateHTML(msg);
+    canvas.parentElement.innerHTML = window.ui.empty(msg, "chart-column");
     return true;
   }
 
@@ -187,19 +157,9 @@ window.PageServerStats = (() => {
     }
   }
 
-  const axisOpts = {
-    ticks: { color: CHART_COLORS.muted, font: { family: "JetBrains Mono", size: 10 } },
-    grid: { color: CHART_COLORS.grid },
-  };
-
   function trendSub(delta, { fallback = "" } = {}) {
     if (delta === undefined) return fallback;
-    if (delta === null) return `<span class="font-mono text-green">↑ nouveau ce cycle</span>`;
-    const flat = Math.abs(delta) < 1;
-    const up = delta > 0;
-    const cls = flat ? "text-muted" : up ? "text-green" : "text-red";
-    const arrow = flat ? "→" : up ? "↑" : "↓";
-    return `<span class="font-mono ${cls}">${arrow} ${Math.abs(delta).toFixed(0)}% vs période précédente</span>`;
+    return window.ui.delta(delta, "vs période précédente");
   }
 
   function deltaPct(cur, prev, hasPrev) {
@@ -207,6 +167,7 @@ window.PageServerStats = (() => {
     if (prev === 0) return cur === 0 ? 0 : null;
     return ((cur - prev) / prev) * 100;
   }
+
 
   // ---------------------------------------------------------------
   // Calculs
@@ -365,9 +326,15 @@ window.PageServerStats = (() => {
     return { launch, days };
   }
 
+
   // ---------------------------------------------------------------
   // Graphiques Chart.js
   // ---------------------------------------------------------------
+  const intAxis = () => {
+    const a = window.axisOpts();
+    return { ...a, ticks: { ...a.ticks, precision: 0 } };
+  };
+
   function buildPeakHoursChart(sessions) {
     const canvas = document.getElementById("chart-peak-hours");
     if (!canvas) return;
@@ -377,14 +344,14 @@ window.PageServerStats = (() => {
       type: "bar",
       data: {
         labels: counts.map((_, h) => `${h}h`),
-        datasets: [{ data: counts, backgroundColor: CHART_COLORS.enchant, borderRadius: 3 }],
+        datasets: [{ data: counts, backgroundColor: highlightMax(counts), hoverBackgroundColor: T.ink, borderRadius: 3 }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y} connexion(s)` } } },
         scales: {
-          x: { ...axisOpts, ticks: { ...axisOpts.ticks, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
-          y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } },
+          x: { ...window.axisOpts(), grid: { display: false }, ticks: { ...window.axisOpts().ticks, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+          y: intAxis(),
         },
       },
     });
@@ -399,12 +366,12 @@ window.PageServerStats = (() => {
       type: "bar",
       data: {
         labels: DAY_LABELS,
-        datasets: [{ data: counts, backgroundColor: CHART_COLORS.gold, borderRadius: 3 }],
+        datasets: [{ data: counts, backgroundColor: highlightMax(counts), hoverBackgroundColor: T.ink, borderRadius: 3 }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y} connexion(s)` } } },
-        scales: { x: axisOpts, y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } } },
+        scales: { x: { ...window.axisOpts(), grid: { display: false } }, y: intAxis() },
       },
     });
   }
@@ -421,15 +388,17 @@ window.PageServerStats = (() => {
         datasets: [{
           label: "Joueurs uniques",
           data: counts,
-          borderColor: CHART_COLORS.enchant,
-          backgroundColor: "rgba(139,108,242,.18)",
-          fill: true, tension: 0.35, pointRadius: 0,
+          borderColor: T.ink,
+          borderWidth: 1.5,
+          backgroundColor: T.fillSoft,
+          fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: T.ink,
         }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y} joueur(s) unique(s)` } } },
-        scales: { x: axisOpts, y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } } },
+        scales: { x: window.axisOpts(), y: intAxis() },
       },
     });
   }
@@ -439,21 +408,23 @@ window.PageServerStats = (() => {
     if (!canvas) return;
     const { labels, counts, avgMinutes } = sessionsPerDay(sessions);
     if (renderEmptyIfNeeded(canvas, labels.length < 2, "Pas encore assez de sessions sur cette période.")) return;
+    const ax = window.axisOpts();
     charts.combo = new Chart(canvas.getContext("2d"), {
       data: {
         labels: labels.map((l) => new Date(l).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })),
         datasets: [
-          { type: "bar", label: "Sessions ouvertes", data: counts, backgroundColor: CHART_COLORS.enchant, yAxisID: "y", borderRadius: 4 },
-          { type: "line", label: "Durée moy. session (min)", data: avgMinutes, borderColor: CHART_COLORS.gold, backgroundColor: CHART_COLORS.gold, yAxisID: "y1", tension: 0.35, pointRadius: 2 },
+          { type: "bar", label: "Sessions ouvertes", data: counts, backgroundColor: BAR, hoverBackgroundColor: T.soft, yAxisID: "y", borderRadius: 3 },
+          { type: "line", label: "Durée moy. session (min)", data: avgMinutes, borderColor: T.ink, backgroundColor: T.ink, borderWidth: 1.5, yAxisID: "y1", tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
         ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: CHART_COLORS.muted, font: { size: 11 } } } },
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "bottom" } },
         scales: {
-          x: axisOpts,
-          y: { ...axisOpts, position: "left", title: { display: true, text: "sessions", color: CHART_COLORS.muted } },
-          y1: { ...axisOpts, position: "right", grid: { display: false }, title: { display: true, text: "minutes", color: CHART_COLORS.muted } },
+          x: ax,
+          y: { ...ax, position: "left", title: { display: true, text: "sessions", color: T.dim } },
+          y1: { ...ax, position: "right", grid: { display: false }, title: { display: true, text: "minutes", color: T.dim } },
         },
       },
     });
@@ -468,12 +439,12 @@ window.PageServerStats = (() => {
       type: "bar",
       data: {
         labels: DURATION_BUCKETS.map((b) => b.label),
-        datasets: [{ data: counts, backgroundColor: CHART_COLORS.enchant, borderRadius: 4 }],
+        datasets: [{ data: counts, backgroundColor: highlightMax(counts), hoverBackgroundColor: T.ink, borderRadius: 3 }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
-        scales: { x: axisOpts, y: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } } },
+        scales: { x: { ...window.axisOpts(), grid: { display: false } }, y: intAxis() },
       },
     });
   }
@@ -483,26 +454,29 @@ window.PageServerStats = (() => {
     if (!canvas) return;
     const { labels, values, cumulative } = newPlayersPerBucket(firstSeenRows, sinceIso);
     if (renderEmptyIfNeeded(canvas, labels.length < 1, "Aucun nouveau joueur sur cette période.")) return;
+    const ax = intAxis();
     charts.newPlayers = new Chart(canvas.getContext("2d"), {
       data: {
         labels,
         datasets: [
-          { type: "bar", label: "Nouveaux joueurs", data: values, backgroundColor: CHART_COLORS.green, yAxisID: "y", borderRadius: 4 },
-          { type: "line", label: "Total cumulé", data: cumulative, borderColor: CHART_COLORS.gold, backgroundColor: CHART_COLORS.gold, yAxisID: "y1", tension: 0.35, pointRadius: 2 },
+          { type: "bar", label: "Nouveaux joueurs", data: values, backgroundColor: BAR, hoverBackgroundColor: T.soft, yAxisID: "y", borderRadius: 3 },
+          { type: "line", label: "Total cumulé", data: cumulative, borderColor: T.ink, backgroundColor: T.ink, borderWidth: 1.5, yAxisID: "y1", tension: 0.35, pointRadius: 0, pointHoverRadius: 4 },
         ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: CHART_COLORS.muted, font: { size: 11 } } } },
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "bottom" } },
         scales: {
-          x: axisOpts,
-          y: { ...axisOpts, position: "left", ticks: { ...axisOpts.ticks, precision: 0 } },
-          y1: { ...axisOpts, position: "right", grid: { display: false }, ticks: { ...axisOpts.ticks, precision: 0 } },
+          x: window.axisOpts(),
+          y: { ...ax, position: "left" },
+          y1: { ...ax, position: "right", grid: { display: false } },
         },
       },
     });
   }
 
+  // Ici la couleur porte une information : récent (vert), tiède (neutre), parti (rouge).
   function buildRetentionChart(lastSeenRows) {
     const canvas = document.getElementById("chart-retention");
     if (!canvas) return;
@@ -512,36 +486,35 @@ window.PageServerStats = (() => {
       type: "bar",
       data: {
         labels: Object.keys(buckets),
-        datasets: [{ data: Object.values(buckets), backgroundColor: [CHART_COLORS.green, CHART_COLORS.gold, CHART_COLORS.red], borderRadius: 4 }],
+        datasets: [{ data: Object.values(buckets), backgroundColor: [T.green, T.faint, T.red], borderRadius: 3, barThickness: 22 }],
       },
       options: {
         indexAxis: "y", responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
-        scales: { x: { ...axisOpts, ticks: { ...axisOpts.ticks, precision: 0 } }, y: axisOpts },
+        scales: { x: intAxis(), y: { ...window.axisOpts(), grid: { display: false } } },
       },
     });
   }
 
-  // Radar, mais avec deux ajouts pour lever l'ambiguïté du "100%" : un
-  // tooltip qui donne la valeur exacte (pas juste le %) au survol de chaque
-  // sommet, et une légende à côté qui étale moyenne / record / détenteur du
-  // record pour chaque statistique, plutôt qu'un simple pourcentage nu.
+  // Radar, avec un tooltip qui donne la valeur exacte (pas juste le %) et une
+  // légende à côté qui étale moyenne / record / détenteur du record.
   function buildRadar(players) {
     const canvas = document.getElementById("chart-radar");
     if (!canvas) return;
-    if (renderEmptyIfNeeded(canvas, players.length === 0, "Aucun joueur tracké pour l'instant.")) return;
+    if (renderEmptyIfNeeded(canvas, players.length === 0, "Aucun joueur suivi pour l'instant.")) return;
     const rows = serverProfileRows(players);
     charts.radar = new Chart(canvas.getContext("2d"), {
       type: "radar",
       data: {
-        labels: rows.map((r) => `${r.icon} ${r.label}`),
+        labels: rows.map((r) => r.label),
         datasets: [{
           label: "Moyenne des joueurs",
           data: rows.map((r) => r.pct),
-          borderColor: CHART_COLORS.enchant,
-          backgroundColor: "rgba(139,108,242,.25)",
+          borderColor: T.ink,
+          borderWidth: 1.5,
+          backgroundColor: T.fillMid,
           pointRadius: 3,
-          pointBackgroundColor: CHART_COLORS.enchant,
+          pointBackgroundColor: T.ink,
         }],
       },
       options: {
@@ -560,8 +533,8 @@ window.PageServerStats = (() => {
           },
         },
         scales: { r: {
-          angleLines: { color: CHART_COLORS.grid }, grid: { color: CHART_COLORS.grid },
-          pointLabels: { color: CHART_COLORS.muted, font: { size: 10, family: "JetBrains Mono" } },
+          angleLines: { color: T.grid }, grid: { color: T.grid },
+          pointLabels: { color: T.dim, font: { size: 10.5 } },
           ticks: { display: false, backdropColor: "transparent" }, min: 0, max: 100,
         } },
       },
@@ -569,51 +542,49 @@ window.PageServerStats = (() => {
     const legendEl = document.getElementById("radar-legend");
     if (legendEl) {
       legendEl.innerHTML = rows.map((row) => {
+        const cat = window.statByKey(row.key);
         const avgFmt = window.fmt.statValue(row.key, Math.round(row.avg));
         const maxFmt = window.fmt.statValue(row.key, row.max);
         return `
-          <div class="flex flex-col gap-0.5 text-xs font-mono px-2.5 py-2 rounded bg-surface2">
-            <div class="flex items-center justify-between">
-              <span class="text-muted">${row.icon} ${row.label}</span>
-              <span class="text-ink font-bold">${row.pct}%</span>
+          <div class="tile p-3">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[12.5px] text-muted flex items-center gap-1.5 min-w-0">${window.catIcon(cat, 13)}<span class="truncate">${cat.short}</span></span>
+              <span class="font-mono font-semibold text-sm">${row.pct}%</span>
             </div>
-            <span class="text-muted/70 text-[10px]">${avgFmt} / ${maxFmt}${row.holderName ? ` (${row.holderName})` : ""}</span>
+            <p class="text-[11.5px] text-dim mt-1 truncate">${avgFmt} / ${maxFmt}${row.holderName ? ` (${window.esc(row.holderName)})` : ""}</p>
           </div>`;
       }).join("");
     }
   }
 
-  // Classement K/D en liste (pas en bar chart) : chaque ligne porte son
-  // rang avec la même palette médaille que la page Podium (rank-badge
-  // r1/r2/r3), pour que ce top se lise comme un vrai podium plutôt que
-  // comme un énième graphique en barres.
+  // Classement K/D en liste : même habillage de rang que la page Classements.
   function kdListHTML(top) {
-    if (!top.length) return emptyStateHTML("Pas encore assez de kills pour établir un classement K/D.");
+    if (!top.length) return window.ui.empty("Pas encore assez de kills pour établir un classement K/D.", "swords");
     const maxRatio = Math.max(...top.map((t) => t.ratio));
-    return `<div class="space-y-2">` + top.map((t, i) => `
-      <div class="flex items-center gap-3 p-2 rounded-lg ${i < 3 ? "bg-surface2" : ""}">
-        <div class="rank-badge ${i === 0 ? "r1" : i === 1 ? "r2" : i === 2 ? "r3" : ""} shrink-0 w-7 h-7 flex items-center justify-center text-xs font-mono font-bold rounded-full border border-border">${i + 1}</div>
-        <p class="font-sans text-sm font-semibold text-ink w-24 sm:w-32 truncate">${t.username}</p>
-        <div class="flex-1 h-2 rounded-full bg-surface2 overflow-hidden">
-          <div class="h-full rounded-full" style="width:${Math.max(4, (t.ratio / maxRatio) * 100).toFixed(0)}%; background:${i < 3 ? MEDAL_COLORS[i] : CHART_COLORS.enchant}"></div>
-        </div>
-        <p class="font-mono text-sm font-bold text-ink w-12 text-right">${(Math.round(t.ratio * 100) / 100).toLocaleString("fr-FR")}</p>
+    return `<div class="divide-rows -my-1">` + top.map((t, i) => `
+      <div class="flex items-center gap-3 py-2.5">
+        ${window.ui.rankBadge(i)}
+        <p class="text-sm font-medium w-24 sm:w-36 truncate">${window.esc(t.username)}</p>
+        <div class="bar-track flex-1"><div class="bar-fill ${i === 0 ? "" : "soft"}" style="width:${Math.max(4, (t.ratio / maxRatio) * 100).toFixed(0)}%"></div></div>
+        <p class="font-mono text-sm font-semibold w-14 text-right">${(Math.round(t.ratio * 100) / 100).toLocaleString("fr-FR")}</p>
       </div>`).join("") + `</div>`;
   }
 
   // ---------------------------------------------------------------
-  // Sous-nav collante + scrollspy
+  // Sous-navigation collante (onglets) + scrollspy
   // ---------------------------------------------------------------
   function subNavHTML() {
     const links = SECTIONS.map(
-      (s) => `<a href="#${s.id}" data-section="${s.id}" class="subnav-link shrink-0 px-3 py-1.5 rounded-full text-[11px] font-mono border border-border text-muted hover:text-ink hover:border-enchant transition-colors">${s.label}</a>`
+      (s) => `<a href="#${s.id}" data-section="${s.id}" class="subnav-link">${s.label}</a>`
     ).join("");
-    return `<nav id="stats-subnav" class="sticky top-0 z-20 -mx-4 sm:-mx-6 md:-mx-10 px-4 sm:px-6 md:px-10 py-2 mb-6 bg-bg/95 backdrop-blur border-b border-border flex gap-2 overflow-x-auto">${links}</nav>`;
+    return `<nav id="stats-subnav" class="subnav" aria-label="Sections de la page">${links}</nav>`;
   }
 
   function bindSubNav() {
     const nav = document.getElementById("stats-subnav");
     if (!nav) return;
+    const first = nav.querySelector("a[data-section]");
+    first?.classList.add("is-active");
     nav.addEventListener("click", (e) => {
       const a = e.target.closest("a[data-section]");
       if (!a) return;
@@ -624,11 +595,11 @@ window.PageServerStats = (() => {
       (entries) => {
         entries.forEach((entry) => {
           if (!entry.isIntersecting) return;
-          nav.querySelectorAll("a[data-section]").forEach((l) => l.classList.remove("bg-surface2", "text-ink", "border-enchant"));
-          nav.querySelector(`a[data-section="${entry.target.id}"]`)?.classList.add("bg-surface2", "text-ink", "border-enchant");
+          nav.querySelectorAll("a[data-section]").forEach((l) => l.classList.remove("is-active"));
+          nav.querySelector(`a[data-section="${entry.target.id}"]`)?.classList.add("is-active");
         });
       },
-      { rootMargin: "-100px 0px -70% 0px", threshold: 0 }
+      { rootMargin: "-120px 0px -70% 0px", threshold: 0 }
     );
     SECTIONS.forEach((s) => {
       const el = document.getElementById(s.id);
@@ -680,104 +651,100 @@ window.PageServerStats = (() => {
       const records = recordCategories(players);
 
       contentWrap.innerHTML = `
-        <!-- HERO — élément signature de la page : un seul repère narratif
-             ("Jour N depuis la 1ère connexion") plutôt qu'une rangée de
-             cartes KPI. Purement all-time, ne dépend jamais du sélecteur
-             de période plus bas : la distinction that le rapport pointait
-             comme mélangée est ici une séparation physique, pas juste un
-             badge. -->
-        <div class="card p-8 md:p-10 mb-4 text-center" style="background:linear-gradient(180deg, rgba(139,108,242,.08), transparent)">
-          <p class="text-[11px] font-mono uppercase tracking-widest text-muted mb-2">${window.APP_CONFIG.SERVER_NAME}${periodBadge("alltime")}</p>
-          ${launch ? `
-            <p class="font-mono font-extrabold text-5xl md:text-6xl text-ink">Jour ${window.fmt.int(launch.days)}</p>
-            <p class="text-sm text-muted mt-2">depuis la toute première connexion enregistrée, le ${launch.launch.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}</p>
-          ` : `<p class="font-mono font-extrabold text-3xl text-ink">Pas encore de données</p>`}
-          <div class="flex flex-wrap justify-center gap-x-8 gap-y-3 mt-6 pt-6 border-t border-border">
-            <div><p class="font-mono font-bold text-xl text-ink">${window.fmt.int(totalPlayers)}</p><p class="text-[11px] text-muted">joueurs trackés</p></div>
-            <div><p class="font-mono font-bold text-xl text-ink">${window.fmt.duration(totalPlaytimeAllTime)}</p><p class="text-[11px] text-muted">jouées cumulées</p></div>
-            <div><p class="font-mono font-bold text-xl text-gold">${window.fmt.distance(totalDistance)}</p><p class="text-[11px] text-muted">soit ${laps.toLocaleString("fr-FR", { maximumFractionDigits: 2 })}× le tour de la Terre 🌍</p></div>
-          </div>
+        <!-- Repères "depuis toujours" : ne dépendent jamais du sélecteur de période. -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+          ${window.ui.kpi({
+            label: "Âge du serveur",
+            value: launch ? `Jour ${window.fmt.int(launch.days)}` : "–",
+            sub: launch ? `Première connexion le ${launch.launch.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}` : "Pas encore de données",
+            icon: "calendar",
+          })}
+          ${window.ui.kpi({ label: "Joueurs suivis", value: window.fmt.int(totalPlayers), icon: "users" })}
+          ${window.ui.kpi({ label: "Temps de jeu cumulé", value: window.fmt.duration(totalPlaytimeAllTime), icon: "clock" })}
+          ${window.ui.kpi({
+            label: "Distance parcourue",
+            value: window.fmt.distance(totalDistance),
+            sub: `Soit ${laps.toLocaleString("fr-FR", { maximumFractionDigits: 2 })} fois le tour de la Terre`,
+            icon: "footprints",
+          })}
         </div>
 
-        <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
-          <p class="text-xs text-muted">Le reste de la page suit la période choisie ci-dessous, sauf mention "All-time".</p>
-          <div class="flex flex-wrap gap-2" id="period-nav">${periodNavHTML()}</div>
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-2">
+          <p class="text-[13px] text-muted">Le reste de la page suit la période choisie, sauf mention « Depuis toujours ».</p>
+          ${periodNavHTML()}
         </div>
 
         ${subNavHTML()}
 
-        <section id="sec-pouls" class="mb-10 scroll-mt-20">
-          ${sectionTitle("💓", "Pouls de la communauté", "period")}
-
-          ${subHeading("En bref")}
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            ${statCard("✨", "Nouveaux joueurs", window.fmt.int(firstSeenRows.length), trendSub(deltaPct(firstSeenRows.length, prevNewPlayers, hasPrev), { fallback: `<span class="text-muted">depuis toujours</span>` }))}
-            ${statCard("🔌", "Joueurs connectés (uniques)", window.fmt.int(uniqueConnected), trendSub(deltaPct(uniqueConnected, prevUniqueConnected, hasPrev)))}
-            ${statCard("⏱️", "Temps de jeu moyen / joueur", window.fmt.duration(avgPlaytimeInPeriod), trendSub(deltaPct(avgPlaytimeInPeriod, prevAvgPlaytime, hasPrev)))}
-            ${statCard("🔁", "Sessions moy. / joueur", avgSessionsPerPlayer.toLocaleString("fr-FR", { maximumFractionDigits: 1 }), trendSub(deltaPct(avgSessionsPerPlayer, prevAvgSessions, hasPrev)))}
+        <section id="sec-pouls" class="mb-12 scroll-mt-32">
+          ${sectionHeader("Pouls de la communauté", "period")}
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4">
+            ${window.ui.kpi({ label: "Nouveaux joueurs", value: window.fmt.int(firstSeenRows.length), sub: trendSub(deltaPct(firstSeenRows.length, prevNewPlayers, hasPrev), { fallback: `<span class="text-dim">Depuis toujours</span>` }), icon: "user-plus" })}
+            ${window.ui.kpi({ label: "Joueurs connectés (uniques)", value: window.fmt.int(uniqueConnected), sub: trendSub(deltaPct(uniqueConnected, prevUniqueConnected, hasPrev)), icon: "plug" })}
+            ${window.ui.kpi({ label: "Temps de jeu moyen par joueur", value: window.fmt.duration(avgPlaytimeInPeriod), sub: trendSub(deltaPct(avgPlaytimeInPeriod, prevAvgPlaytime, hasPrev)), icon: "timer" })}
+            ${window.ui.kpi({ label: "Sessions moyennes par joueur", value: avgSessionsPerPlayer.toLocaleString("fr-FR", { maximumFractionDigits: 1 }), sub: trendSub(deltaPct(avgSessionsPerPlayer, prevAvgSessions, hasPrev)), icon: "repeat" })}
           </div>
 
-          ${subHeading("Quand est-ce que ça joue ?")}
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            ${chartCard("chart-peak-hours", "Connexions par heure de la journée", "Toutes les connexions de la période, cumulées par heure (0h–23h).", 200)}
-            ${chartCard("chart-peak-days", "Connexions par jour de la semaine", "Toutes les connexions de la période, cumulées par jour.", 200)}
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+            ${chartCard("chart-peak-hours", "Connexions par heure", "À quelle heure ça joue. Le pic ressort en blanc.", 220)}
+            ${chartCard("chart-peak-days", "Connexions par jour de la semaine", "Quel jour ça joue. Le pic ressort en blanc.", 220)}
           </div>
-
-          ${subHeading("Tendance sur la période")}
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            ${chartCard("chart-active-players", "Joueurs actifs par jour", "Joueurs uniques connectés au moins une fois ce jour-là.")}
-            ${chartCard("chart-combo", "Sessions & durée moyenne", "Nombre de sessions ouvertes par jour — un même joueur peut se reconnecter plusieurs fois.")}
+            ${chartCard("chart-active-players", "Joueurs actifs par jour", "Joueurs uniques connectés au moins une fois ce jour-là.", 240)}
+            ${chartCard("chart-combo", "Sessions et durée moyenne", "Sessions ouvertes par jour. Un même joueur peut se reconnecter plusieurs fois.", 240)}
           </div>
         </section>
 
-        <section id="sec-joueurs" class="mb-10 scroll-mt-20">
-          ${sectionTitle("🧑‍🤝‍🧑", "Joueurs", "period")}
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            ${chartCard("chart-new-players", "Nouveaux joueurs & croissance cumulée", `Regroupé par ${groupByMonth ? "mois" : "jour"} sur cette période.`, 240)}
-            ${chartCard("chart-session-hist", "Répartition des durées de session", "Sessions terminées uniquement — les parties en cours ne sont pas encore comptabilisées.", 240)}
+        <section id="sec-joueurs" class="mb-12 scroll-mt-32">
+          ${sectionHeader("Joueurs", "period")}
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-8">
+            ${chartCard("chart-new-players", "Nouveaux joueurs et croissance cumulée", `Regroupé par ${groupByMonth ? "mois" : "jour"} sur cette période.`, 240)}
+            ${chartCard("chart-session-hist", "Durée des sessions", "Sessions terminées uniquement. Les parties en cours ne sont pas encore comptées.", 240)}
           </div>
-          ${sectionTitle("🟢", "Statut des joueurs", "alltime", "Basé sur la dernière connexion de chaque joueur, tous historiques confondus — indépendant de la période choisie plus haut.")}
+          ${sectionHeader("Statut des joueurs", "alltime", "Basé sur la dernière connexion de chaque joueur, tous historiques confondus. Indépendant de la période choisie.")}
           ${chartCard("chart-retention", "Ancienneté depuis la dernière connexion", "", 170)}
         </section>
 
-        <section id="sec-combat" class="mb-10 scroll-mt-20">
-          ${sectionTitle("⚔️", "Combat", "alltime")}
+        <section id="sec-combat" class="mb-12 scroll-mt-32">
+          ${sectionHeader("Combat", "alltime")}
           <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="card p-5 flex flex-col justify-center gap-1 text-center lg:text-left">
-              <p class="text-[11px] font-mono uppercase tracking-wider text-muted">Ratio K/D global du serveur</p>
-              <p class="font-mono font-extrabold text-4xl text-gold">${globalRatio.toLocaleString("fr-FR", { maximumFractionDigits: 2 })}</p>
-              <p class="text-xs text-muted mt-1">Total des kills PvP sur total des morts, tous joueurs confondus.</p>
-            </div>
-            <div class="lg:col-span-2 card p-4">
-              <p class="text-[11px] font-mono uppercase tracking-wider text-muted">Top 6 meilleurs ratios K/D individuels</p>
-              <p class="text-[11px] text-muted/70 mb-3">Calculé en kills / (morts + 1) pour rester défini même à 0 mort.</p>
-              ${kdListHTML(top)}
-            </div>
+            ${window.ui.kpi({
+              label: "Ratio K/D global du serveur",
+              value: globalRatio.toLocaleString("fr-FR", { maximumFractionDigits: 2 }),
+              sub: "Kills PvP divisés par les morts, tous joueurs confondus.",
+              icon: "swords",
+            })}
+            ${window.ui.panel({
+              cls: "lg:col-span-2",
+              title: "Meilleurs ratios K/D individuels",
+              desc: "Top 6, calculé en kills / (morts + 1) pour rester défini même à 0 mort.",
+              body: kdListHTML(top),
+            })}
           </div>
         </section>
 
-        <section id="sec-records" class="mb-10 scroll-mt-20">
-          ${sectionTitle("🏅", "Records cumulés", "alltime", "Somme de la statistique sur tous les joueurs trackés, depuis toujours.")}
+        <section id="sec-records" class="mb-12 scroll-mt-32">
+          ${sectionHeader("Records cumulés", "alltime", "Somme de la statistique sur tous les joueurs suivis, depuis toujours.")}
           <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             ${records.map((r) => {
               const isPlaytime = r.cat.key === "playtime_seconds" || r.cat.key === "playtime";
-              const val = isPlaytime 
-                ? `${window.fmt.int(Math.round(r.total / 3600))} h` 
+              const val = isPlaytime
+                ? `${window.fmt.int(Math.round(r.total / 3600))} h`
                 : window.fmt.int(r.total);
-              return recordTile(r.cat.icon, r.cat.short, val);
+              return recordTile(r.cat, val);
             }).join("")}
           </div>
         </section>
 
-        <section id="sec-profil" class="scroll-mt-20">
-          ${sectionTitle("🕸️", "Profil du serveur", "alltime", "Chaque axe est indépendant : 100% = le record actuel du serveur pour CETTE statistique précise, pas un maximum commun à tous les axes. Survole un point ou regarde la légende pour les valeurs exactes.")}
+        <section id="sec-profil" class="scroll-mt-32">
+          ${sectionHeader("Profil du serveur", "alltime", "Chaque axe est indépendant : 100 % = le record actuel du serveur pour cette statistique précise. Survole un point ou lis la légende pour les valeurs exactes.")}
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            ${chartCard("chart-radar", "Profil moyen (toile)", "", 320)}
-            <div class="card p-4">
-              <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-1">Détail par statistique</p>
-              <p class="text-[11px] text-muted/70 mb-3">Moyenne des joueurs / record du serveur (détenteur du record entre parenthèses).</p>
-              <div id="radar-legend" class="grid grid-cols-2 gap-2"></div>
-            </div>
+            ${chartCard("chart-radar", "Profil moyen", "", 330)}
+            ${window.ui.panel({
+              title: "Détail par statistique",
+              desc: "Moyenne des joueurs sur record du serveur, avec le détenteur du record entre parenthèses.",
+              body: `<div id="radar-legend" class="grid grid-cols-2 gap-2"></div>`,
+            })}
           </div>
         </section>
       `;
@@ -800,17 +767,14 @@ window.PageServerStats = (() => {
       buildRadar(players);
     } catch (e) {
       console.error(e);
-      contentWrap.innerHTML = `<p class="text-red text-sm">Erreur lors du chargement des statistiques serveur.</p>`;
+      contentWrap.innerHTML = window.ui.errorMsg("Erreur lors du chargement des statistiques serveur.");
     }
   }
 
   function renderAll() {
     const root = document.getElementById("page-root");
     root.innerHTML = `
-      <header class="mb-7">
-        <h1 class="text-2xl font-extrabold tracking-tight">Serveur Stats</h1>
-        <p class="text-muted text-sm mt-1">Vue d'ensemble de l'activité de ${window.APP_CONFIG.SERVER_NAME} — indépendante des statistiques d'un joueur en particulier.</p>
-      </header>
+      ${window.ui.pageHeader(`Vue d'ensemble de l'activité de ${window.esc(window.APP_CONFIG.SERVER_NAME)}, indépendante des statistiques d'un joueur en particulier.`)}
       <div id="stats-content">${window.skeletonRows(4, "h-24")}</div>
     `;
   }

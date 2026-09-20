@@ -3,11 +3,11 @@ window.PageLiveFeed = (() => {
   const MAX_ITEMS = 60;
 
   const ICONS = {
-    milestone: "🏆",
-    overtake: "🔴",
-    join: "🟢",
-    leave: "⚪",
-    default: "✨",
+    milestone: "trophy",
+    overtake: "trending-up",
+    join: "log-in",
+    leave: "log-out",
+    default: "sparkles",
   };
 
   async function fetchEvents() {
@@ -23,12 +23,10 @@ window.PageLiveFeed = (() => {
   function eventItemHTML(evt) {
     const icon = ICONS[evt.event_type] || ICONS.default;
     return `
-      <div class="flex items-start gap-3 px-4 py-3 border-b border-border last:border-0">
-        <span class="text-lg leading-none mt-0.5">${icon}</span>
-        <div class="min-w-0 flex-1">
-          <p class="text-sm">${evt.message}</p>
-          <p class="text-[11px] font-mono text-muted mt-0.5">${window.fmt.timeAgo(evt.created_at)}</p>
-        </div>
+      <div class="flex items-start gap-3 px-5 py-3.5">
+        <span class="stat-icon">${window.icon(icon, 16)}</span>
+        <p class="text-sm flex-1 min-w-0 pt-1.5">${window.esc(evt.message)}</p>
+        <p class="text-[12.5px] text-dim shrink-0 pt-1.5">${window.fmt.timeAgo(evt.created_at)}</p>
       </div>`;
   }
 
@@ -60,16 +58,19 @@ window.PageLiveFeed = (() => {
   function renderAll() {
     const root = document.getElementById("page-root");
     root.innerHTML = `
-      <header class="mb-7 flex items-center gap-3">
-        <div>
-          <h1 class="text-2xl font-extrabold tracking-tight">Live Feed</h1>
-          <p class="text-muted text-sm mt-1">Les derniers exploits et mouvements du classement, en direct.</p>
+      ${window.ui.pageHeader(
+        "Les derniers exploits et mouvements du classement, en direct.",
+        `<span class="badge badge-green"><span class="w-1.5 h-1.5 rounded-full bg-green live-dot"></span>En direct</span>`
+      )}
+      <section class="card overflow-hidden">
+        <div class="card-head pb-4 border-b border-border">
+          <div>
+            <h3 class="card-title">Fil d'activité</h3>
+            <p class="card-desc">Les ${MAX_ITEMS} derniers événements, les plus récents en premier.</p>
+          </div>
         </div>
-        <span class="ml-auto inline-flex items-center gap-1.5 text-[11px] font-mono text-red">
-          <span class="w-1.5 h-1.5 rounded-full bg-red live-dot"></span> LIVE
-        </span>
-      </header>
-      <div class="card" id="live-list">${window.skeletonRows(6, "h-14")}</div>
+        <div id="live-list" class="divide-rows">${window.skeletonRows(6, "h-14")}</div>
+      </section>
     `;
   }
 
@@ -80,10 +81,10 @@ window.PageLiveFeed = (() => {
       const list = document.getElementById("live-list");
       list.innerHTML = events.length
         ? events.map(eventItemHTML).join("")
-        : `<p data-empty class="p-4 text-sm text-muted">Aucun événement pour le moment. Reviens un peu plus tard !</p>`;
+        : `<div data-empty>${window.ui.empty("Aucun événement pour le moment. Les prochains exploits apparaîtront ici dès qu'ils se produisent.", "radio")}</div>`;
     } catch (e) {
       console.error(e);
-      document.getElementById("live-list").innerHTML = `<p class="p-4 text-sm text-red">Erreur lors du chargement du fil.</p>`;
+      document.getElementById("live-list").innerHTML = `<div class="p-5">${window.ui.errorMsg("Erreur lors du chargement du fil.")}</div>`;
     }
     subscribeRealtime();
     return () => { if (channel) window.sb.removeChannel(channel); };

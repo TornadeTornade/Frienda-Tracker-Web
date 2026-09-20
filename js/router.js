@@ -15,16 +15,28 @@ function currentCleanup() {
   }
 }
 
+let routeToken = 0;
+
 function route() {
   currentCleanup();
+  const token = ++routeToken;
   const fullHash = location.hash || "#classement";
   const routeKey = fullHash.split("?")[0]; // ← ignore la query string pour le matching
+  const known = !!window.ROUTES[routeKey];
   const handler = window.ROUTES[routeKey] || window.ROUTES["#classement"];
-  const root = document.getElementById("page-root");
-  root.scrollTo?.(0, 0);
+  const title = window.PAGE_TITLES[known ? routeKey : "#classement"];
+  document.getElementById("page-title").textContent = title;
+  document.title = `${title} – Frienda Tracker`;
   window.scrollTo(0, 0);
-  const cleanup = handler();
-  if (typeof cleanup === "function") window.__pageCleanup = cleanup;
+
+  // Les pages async renvoient une Promise qui résout vers leur fonction de nettoyage
+  // (canaux realtime, timers, graphiques). Si l'utilisateur a déjà changé de page
+  // entre-temps, on nettoie tout de suite au lieu de laisser fuir.
+  Promise.resolve(handler()).then((cleanup) => {
+    if (typeof cleanup !== "function") return;
+    if (token !== routeToken) { try { cleanup(); } catch (e) { /* noop */ } return; }
+    window.__pageCleanup = cleanup;
+  });
 }
 
 window.addEventListener("hashchange", route);

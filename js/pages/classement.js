@@ -11,45 +11,56 @@ window.PageClassement = (() => {
     return data ?? [];
   }
 
+  const sum = (key) => players.reduce((s, p) => s + (p[key] ?? 0), 0);
+
   function sorted(key) {
     return [...players].sort((a, b) => (b[key] ?? 0) - (a[key] ?? 0));
   }
 
-  function hallOfFameCard(key) {
+  // ---------- KPI ----------
+  function kpisHTML() {
+    return [
+      window.ui.kpi({ label: "Joueurs suivis", value: window.fmt.int(players.length), icon: "users" }),
+      window.ui.kpi({ label: "Temps de jeu cumulé", value: window.fmt.duration(sum("playtime_seconds")), icon: "clock" }),
+      window.ui.kpi({ label: "Blocs cassés", value: window.fmt.int(sum("blocks_broken")), icon: "pickaxe" }),
+      window.ui.kpi({ label: "Distance parcourue", value: window.fmt.distance(sum("distance_meters")), icon: "footprints" }),
+    ].join("");
+  }
+
+  // ---------- Recordmen ----------
+  function recordHolderRow(key) {
     const cat = window.statByKey(key);
     const top = sorted(key)[0];
     if (!top) return "";
     return `
-      <div class="card p-4 flex items-center gap-3 relative overflow-hidden">
-        <div class="absolute -right-4 -top-4 text-6xl opacity-10">${cat.icon}</div>
-        <img src="${window.avatarHead(top.uuid, 44)}" class="w-11 h-11 rounded-md shadow-slot bg-bg" alt="" />
-        <div class="min-w-0">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted truncate">${cat.label}</p>
-          <p class="font-bold truncate">${top.username}</p>
-          <p class="font-mono text-gold text-sm">${window.fmt.statValue(key, top[key])}</p>
+      <div class="flex items-center gap-3 py-3">
+        <span class="stat-icon">${window.catIcon(cat, 16)}</span>
+        <div class="min-w-0 flex-1">
+          <p class="text-[12.5px] text-muted truncate">${cat.label}</p>
+          <div class="flex items-center gap-2 mt-0.5">
+            ${window.ui.avatar(top.uuid, 18)}
+            <p class="text-sm font-medium truncate">${window.esc(top.username)}</p>
+          </div>
         </div>
+        <p class="font-mono text-sm font-semibold shrink-0">${window.fmt.statValue(key, top[key])}</p>
       </div>`;
   }
 
+  // ---------- Classement ----------
   function categoryNav() {
-    return `
-      <div class="flex flex-wrap gap-2" id="cat-nav">
-        ${window.STAT_CATEGORIES.map(
-          (c) => `<button data-key="${c.key}" class="chip-btn ${c.key === activeKey ? "active" : ""}">
-                    ${c.icon} ${c.short}
-                  </button>`
-        ).join("")}
-      </div>`;
+    return window.STAT_CATEGORIES.map(
+      (c) => `<button data-key="${c.key}" class="chip-btn ${c.key === activeKey ? "active" : ""}">${window.catIcon(c, 14)}${c.short}</button>`
+    ).join("");
   }
 
   function detailGrid(p) {
     return `
-      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 px-4 pb-4 pt-1">
+      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 px-5 pb-5 pt-1">
         ${window.STAT_CATEGORIES.map(
           (c) => `
-          <div class="rounded-lg bg-bg/60 border border-border px-3 py-2">
-            <p class="text-[10px] font-mono uppercase text-muted truncate">${c.icon} ${c.short}</p>
-            <p class="font-mono font-semibold text-sm">${window.fmt.statValue(c.key, p[c.key])}</p>
+          <div class="tile px-3 py-2">
+            <p class="text-[12px] text-muted truncate flex items-center gap-1.5">${window.catIcon(c, 12)}${c.short}</p>
+            <p class="font-mono font-semibold text-sm mt-0.5">${window.fmt.statValue(c.key, p[c.key])}</p>
           </div>`
         ).join("")}
       </div>`;
@@ -57,23 +68,23 @@ window.PageClassement = (() => {
 
   function listHTML() {
     const list = sorted(activeKey);
-    const cat = window.statByKey(activeKey);
+    if (!list.length) return window.ui.empty("Aucun joueur n'a encore été suivi.", "users");
+    const leader = list[0][activeKey] || 0;
     return list
       .map((p, i) => {
-        const rank = i + 1;
-        const rankClass = rank === 1 ? "r1" : rank === 2 ? "r2" : rank === 3 ? "r3" : "";
         const isOpen = expandedUuid === p.uuid;
+        const share = leader > 0 ? Math.max(2, Math.round(((p[activeKey] ?? 0) / leader) * 100)) : 0;
         return `
-        <div class="card mb-2 overflow-hidden">
-          <button class="player-row w-full flex items-center gap-3 px-4 py-3 text-left" data-toggle="${p.uuid}">
-            <span class="rank-badge ${rankClass}">${rank}</span>
-            <img src="${window.avatarHead(p.uuid, 36)}" class="w-9 h-9 rounded-md shadow-slot bg-bg" alt="" />
+        <div>
+          <button class="player-row w-full flex items-center gap-3 px-5 py-3 text-left" data-toggle="${p.uuid}" aria-expanded="${isOpen}">
+            ${window.ui.rankBadge(i)}
+            ${window.ui.avatar(p.uuid, 30)}
             <span class="flex-1 min-w-0">
-              <span class="block font-semibold truncate">${p.username}</span>
-              <span class="block text-[11px] text-muted font-mono">${cat.icon} ${cat.label}</span>
+              <span class="block text-sm font-medium truncate">${window.esc(p.username)}</span>
+              <span class="block bar-track mt-1.5 max-w-[220px]"><span class="bar-fill ${i === 0 ? "" : "soft"} block" style="width:${share}%"></span></span>
             </span>
-            <span class="font-mono font-bold text-gold shrink-0">${window.fmt.statValue(activeKey, p[activeKey])}</span>
-            <span class="text-muted transition-transform shrink-0 ${isOpen ? "rotate-180" : ""}">⌄</span>
+            <span class="font-mono text-sm font-semibold shrink-0">${window.fmt.statValue(activeKey, p[activeKey])}</span>
+            <span class="text-dim shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}">${window.icon("chevron-down", 16)}</span>
           </button>
           ${isOpen ? detailGrid(p) : ""}
         </div>`;
@@ -84,30 +95,39 @@ window.PageClassement = (() => {
   function renderList() {
     const listWrap = document.getElementById("classement-list");
     if (listWrap) listWrap.innerHTML = listHTML();
+    const desc = document.getElementById("classement-desc");
+    if (desc) desc.textContent = `Trié par ${window.statByKey(activeKey).label.toLowerCase()}. Clique sur un joueur pour voir toutes ses statistiques.`;
   }
 
   function renderAll() {
     const root = document.getElementById("page-root");
     root.innerHTML = `
-      <header class="mb-7">
-        <h1 class="text-2xl font-extrabold tracking-tight">Classements</h1>
-        <p class="text-muted text-sm mt-1">Le tableau d'honneur du serveur ${window.APP_CONFIG.SERVER_NAME}.</p>
-      </header>
+      ${window.ui.pageHeader(`Le tableau d'honneur du serveur ${window.esc(window.APP_CONFIG.SERVER_NAME)}.`)}
 
-      <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🏅 Hall of Fame</p>
-        <div id="hof-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          ${window.skeletonRows(4, "h-[68px]")}
-        </div>
-      </section>
+      <div id="kpi-grid" class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4">
+        ${window.skeletonRows(4, "h-[112px]").replace(/mb-2/g, "")}
+      </div>
 
-      <section>
-        <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
-          <p class="text-[11px] font-mono uppercase tracking-wider text-muted">Trier par catégorie</p>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+        <section class="card lg:col-span-2 overflow-hidden">
+          <div class="card-head">
+            <div>
+              <h3 class="card-title">Classement</h3>
+              <p class="card-desc" id="classement-desc">Chargement…</p>
+            </div>
+          </div>
+          <div id="cat-nav-wrap" class="flex flex-wrap gap-1.5 px-5 pt-4 pb-4 border-b border-border">${window.skeletonRows(1, "h-8")}</div>
+          <div id="classement-list" class="divide-rows">${window.skeletonRows(6, "h-14")}</div>
+        </section>
+
+        <div id="hof-wrap" class="lg:sticky lg:top-[72px]">
+          ${window.ui.panel({
+            title: "Recordmen",
+            desc: "Le meilleur joueur dans quatre catégories clés.",
+            body: `<div id="hof-grid" class="divide-rows -my-1">${window.skeletonRows(4, "h-12")}</div>`,
+          })}
         </div>
-        <div id="cat-nav-wrap" class="mb-5">${window.skeletonRows(1, "h-9")}</div>
-        <div id="classement-list">${window.skeletonRows(6)}</div>
-      </section>
+      </div>
     `;
   }
 
@@ -120,8 +140,6 @@ window.PageClassement = (() => {
       expandedUuid = null;
       catWrap.innerHTML = categoryNav();
       renderList();
-      const hof = document.getElementById("hof-grid");
-      // le hall of fame reste indépendant de la catégorie sélectionnée
     });
 
     document.getElementById("classement-list").addEventListener("click", (e) => {
@@ -140,12 +158,12 @@ window.PageClassement = (() => {
       players = await fetchPlayers();
     } catch (e) {
       console.error(e);
-      document.getElementById("classement-list").innerHTML =
-        `<p class="text-red text-sm">Impossible de charger le classement.</p>`;
+      document.getElementById("classement-list").innerHTML = `<div class="p-5">${window.ui.errorMsg("Impossible de charger le classement.")}</div>`;
       return;
     }
 
-    document.getElementById("hof-grid").innerHTML = HALL_OF_FAME_KEYS.map(hallOfFameCard).join("");
+    document.getElementById("kpi-grid").innerHTML = kpisHTML();
+    document.getElementById("hof-grid").innerHTML = HALL_OF_FAME_KEYS.map(recordHolderRow).join("");
     document.getElementById("cat-nav-wrap").innerHTML = categoryNav();
     renderList();
   }
