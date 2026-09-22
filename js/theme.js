@@ -16,13 +16,14 @@ window.THEME = {
   fillMid: "rgba(250,250,250,.12)",
 };
 
-// Séries multiples (ex. comparateur 2–4 joueurs) : la distinction passe par
-// l'intensité ET par le trait (plein / pointillé), pas par la couleur.
+// Séries multiples (comparateur 2–4 joueurs). C'est la seule entorse à la palette
+// monochrome : à 4 joueurs sur 16 axes, des nuances de gris ne se distinguent plus.
+// Teintes désaturées + forme de point différente (lisible aussi en daltonisme).
 window.SERIES = [
-  { color: "#FAFAFA", dash: [] },
-  { color: "#A1A1AA", dash: [] },
-  { color: "#71717A", dash: [6, 4] },
-  { color: "#52525B", dash: [2, 3] },
+  { color: "#FAFAFA", point: "circle" },
+  { color: "#60A5FA", point: "rectRot" },
+  { color: "#FBBF24", point: "triangle" },
+  { color: "#F472B6", point: "rect" },
 ];
 
 // Options d'axe communes

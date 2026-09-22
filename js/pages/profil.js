@@ -19,12 +19,9 @@ window.PageProfil = (() => {
   let cardSelectedKeys = [];
   const RADAR_KEYS = ["playtime_seconds", "player_kills", "mob_kills", "blocks_broken", "distance_meters", "jumps"];
 
-  // Stats jamais affichées sur cette page (même si présentes dans STAT_CATEGORIES).
-  const HIDDEN_STAT_KEYS = ["diamond_ores_mined", "ancient_debris_mined"];
-  // Stats exclues uniquement du graphique « Évolution ».
-  const EVOLUTION_EXCLUDED_KEYS = ["xp_level"];
-  const visibleCategories = () => window.STAT_CATEGORIES.filter((c) => !HIDDEN_STAT_KEYS.includes(c.key));
-  const evolutionCategories = () => visibleCategories().filter((c) => !EVOLUTION_EXCLUDED_KEYS.includes(c.key));
+  // Stats masquées : voir js/statsVisibility.js
+  const visibleCategories = () => window.visibleStats("profil");
+  const evolutionCategories = () => window.evolutionStats("profil");
 
   // ---------- Succès (advancements) ----------
   // Table attendue : player_advancements (une ligne par succès et par joueur).
@@ -260,7 +257,7 @@ window.PageProfil = (() => {
     const chartCompareData = [];
     const rows = [];
 
-    RADAR_KEYS.forEach((key) => {
+    window.filterVisibleKeys(RADAR_KEYS, "profil").forEach((key) => {
       const cat = window.statByKey(key);
       const values = allStats.map((p) => p[key] ?? 0);
       const max = Math.max(1, ...values);
@@ -469,7 +466,7 @@ window.PageProfil = (() => {
         ? `<p class="text-[12.5px] text-dim mb-3">Moyenne et record calculés sur les ${sessions.length} dernières sessions (${sessionsCount} au total).</p>`
         : "";
     const n = allStats.length || 1;
-    const quick = ["playtime_seconds", "player_kills", "blocks_broken", "distance_meters"].map((key) => {
+    const quick = window.filterVisibleKeys(["playtime_seconds", "player_kills", "blocks_broken", "distance_meters"], "profil").map((key) => {
       const cat = window.statByKey(key);
       return `
         <div class="min-w-0">

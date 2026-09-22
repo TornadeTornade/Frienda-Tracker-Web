@@ -48,7 +48,7 @@ window.PageClassement = (() => {
 
   // ---------- Classement ----------
   function categoryNav() {
-    return window.STAT_CATEGORIES.map(
+    return window.visibleStats("classement").map(
       (c) => `<button data-key="${c.key}" class="chip-btn ${c.key === activeKey ? "active" : ""}">${window.catIcon(c, 14)}${c.short}</button>`
     ).join("");
   }
@@ -56,7 +56,7 @@ window.PageClassement = (() => {
   function detailGrid(p) {
     return `
       <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 px-5 pb-5 pt-1">
-        ${window.STAT_CATEGORIES.map(
+        ${window.visibleStats("classement").map(
           (c) => `
           <div class="tile px-3 py-2">
             <p class="text-[12px] text-muted truncate flex items-center gap-1.5">${window.catIcon(c, 12)}${c.short}</p>
@@ -163,7 +163,7 @@ window.PageClassement = (() => {
     }
 
     document.getElementById("kpi-grid").innerHTML = kpisHTML();
-    document.getElementById("hof-grid").innerHTML = HALL_OF_FAME_KEYS.map(recordHolderRow).join("");
+    document.getElementById("hof-grid").innerHTML = window.filterVisibleKeys(HALL_OF_FAME_KEYS, "classement").map(recordHolderRow).join("");
     document.getElementById("cat-nav-wrap").innerHTML = categoryNav();
     renderList();
   }

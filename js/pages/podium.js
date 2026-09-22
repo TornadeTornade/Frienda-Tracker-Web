@@ -11,7 +11,7 @@ window.PagePodium = (() => {
   const ranked = (key) => [...players].sort((a, b) => (b[key] ?? 0) - (a[key] ?? 0));
 
   function categoryNav() {
-    return window.STAT_CATEGORIES.map(
+    return window.visibleStats("podium").map(
       (c) => `<button data-key="${c.key}" class="chip-btn ${c.key === activeKey ? "active" : ""}">${window.catIcon(c, 14)}${c.short}</button>`
     ).join("");
   }

@@ -8,6 +8,7 @@ window.PageComparateur = (() => {
   let radarInstance = null;
   let draggedUuid = null; // uuid en cours de drag dans les chips
 
+  
   async function fetchAllPlayersLight() {
     const { data, error } = await window.sb.from("player_stats").select("uuid, username").order("username");
     if (error) throw error;
@@ -27,7 +28,7 @@ window.PageComparateur = (() => {
     const { data, error } = await window.sb.from("player_stats").select("*");
     if (error) throw error;
     globalMax = {};
-    window.STAT_CATEGORIES.forEach((c) => {
+    window.visibleStats("comparateur").forEach((c) => {
       globalMax[c.key] = Math.max(1, ...(data ?? []).map((p) => p[c.key] ?? 0));
     });
     return globalMax;
@@ -114,7 +115,7 @@ window.PageComparateur = (() => {
     if (stats.length < MIN_PLAYERS) {
       return window.ui.empty(`Sélectionne au moins ${MIN_PLAYERS} joueurs pour lancer la comparaison.`, "scale");
     }
-    const rows = window.STAT_CATEGORIES.map((cat) => {
+    const rows = window.visibleStats("comparateur").map((cat) => {
       const values = stats.map((s) => s[cat.key] ?? 0);
       const max = Math.max(...values);
       return `
@@ -136,7 +137,7 @@ window.PageComparateur = (() => {
                 <th class="!text-center">
                   <div class="flex flex-col items-center gap-1.5 py-1">
                     ${window.ui.avatar(s.uuid, 28)}
-                    <span class="text-[13px] font-semibold text-ink">${window.esc(s.username)}</span>
+                    <span class="text-[13px] font-semibold text-ink inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full" style="background:${(window.SERIES[stats.indexOf(s)] || window.SERIES[0]).color}"></span>${window.esc(s.username)}</span>
                   </div>
                 </th>`
                 )
@@ -158,35 +159,61 @@ window.PageComparateur = (() => {
     radarInstance = new Chart(canvas.getContext("2d"), {
       type: "radar",
       data: {
-        labels: window.STAT_CATEGORIES.map((c) => c.short),
+        labels: window.visibleStats("comparateur").map((c) => c.short),
         datasets: stats.map((s, i) => {
           const ser = window.SERIES[i] || window.SERIES[0];
           return {
             label: s.username,
-            data: window.STAT_CATEGORIES.map((c) => Math.round(((s[c.key] ?? 0) / max[c.key]) * 100)),
+            data: window.visibleStats("comparateur").map((c) => Math.round(((s[c.key] ?? 0) / max[c.key]) * 100)),
             borderColor: ser.color,
-            borderDash: ser.dash,
-            borderWidth: 1.5,
-            backgroundColor: i === 0 ? window.THEME.fillMid : "transparent",
-            pointRadius: 2,
+            borderWidth: 2,
+            backgroundColor: ser.color + "1F", // remplissage léger (12 %) pour voir l'aire de chacun
+            pointStyle: ser.point,
+            pointRadius: 3.5,
+            pointHoverRadius: 6,
             pointBackgroundColor: ser.color,
+            pointBorderColor: "#0F0F11",
           };
         }),
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: "bottom" } },
+        animation: { duration: 250 },
+        interaction: { mode: "nearest", intersect: true },
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: {
+            callbacks: {
+              title: (items) => window.visibleStats("comparateur")[items[0].dataIndex].label,
+              label: (ctx) => `${ctx.dataset.label} : ${ctx.parsed.r} % du record`,
+            },
+          },
+        },
         scales: {
           r: {
             angleLines: { color: window.THEME.grid },
             grid: { color: window.THEME.grid },
-            pointLabels: { color: window.THEME.dim, font: { size: 10 } },
+            pointLabels: { color: window.THEME.soft, font: { size: 10.5 } },
             ticks: { display: false, backdropColor: "transparent" },
             suggestedMin: 0, suggestedMax: 100,
           },
         },
       },
     });
+  }
+
+  // Met un joueur en avant (survol d'une pastille) : les autres s'estompent.
+  function highlightSeries(index) {
+    if (!radarInstance) return;
+    radarInstance.data.datasets.forEach((ds, i) => {
+      const ser = window.SERIES[i] || window.SERIES[0];
+      const on = index === null || i === index;
+      ds.borderColor = on ? ser.color : ser.color + "5C";
+      ds.pointBackgroundColor = on ? ser.color : ser.color + "5C";
+      ds.backgroundColor = index === i ? ser.color + "38" : on ? ser.color + "1F" : "transparent";
+      ds.borderWidth = index === i ? 3 : 2;
+    });
+    radarInstance.update();
   }
 
   async function refreshTable() {
@@ -224,7 +251,7 @@ window.PageComparateur = (() => {
           <div id="suggestions" class="hidden absolute z-10 left-0 right-0 mt-1 card max-h-64 overflow-y-auto shadow-xl shadow-black/50"></div>
         </div>
         <div class="flex flex-wrap gap-2 mt-4" id="chips">${chipsHTML()}</div>
-        <p class="text-[12.5px] text-dim mt-3">Glisse les pastilles pour changer l'ordre des colonnes.</p>
+        <p class="text-[12.5px] text-dim mt-3">Survole une pastille pour mettre un joueur en avant sur le graphique, glisse-la pour changer l'ordre des colonnes.</p>
       </section>
 
       <div id="compare-export-zone" class="bg-bg">
@@ -315,6 +342,12 @@ window.PageComparateur = (() => {
       selected.splice(to, 0, draggedUuid);
       chipsEl.innerHTML = chipsHTML();
     });
+
+    chipsEl.addEventListener("mouseover", (e) => {
+      const chip = e.target.closest("[data-chip]");
+      if (chip) highlightSeries(selected.indexOf(chip.dataset.chip));
+    });
+    chipsEl.addEventListener("mouseleave", () => highlightSeries(null));
 
     chipsEl.addEventListener("drop", (e) => {
       e.preventDefault();

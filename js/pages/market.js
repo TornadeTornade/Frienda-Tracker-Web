@@ -32,6 +32,16 @@ window.PageMarket = (() => {
 
   let allActiveListings = []; // toute la boutique, gardée en mémoire pour la pagination côté client
   let shopPage = 1;
+  let shopQuery = ""; // recherche texte (nom d'item ou vendeur)
+  let shopCurrency = "ALL"; // filtre monnaie de la boutique
+  let shopSort = "recent"; // recent | price_asc | price_desc | name_asc
+
+  const SHOP_SORTS = [
+    { key: "recent", label: "Plus récentes" },
+    { key: "price_asc", label: "Prix croissant" },
+    { key: "price_desc", label: "Prix décroissant" },
+    { key: "name_asc", label: "Nom (A→Z)" },
+  ];
 
   // Repli quand une texture ne charge pas : icône neutre à la place de l'image cassée.
   window.__imgFallback = (img, size) => {
@@ -122,6 +132,34 @@ window.PageMarket = (() => {
     return data ?? [];
   }
 
+  // Liste (plus large que le top 8) des items déjà échangés, pour le sélecteur de cours.
+  // Pas de vraie SELECT DISTINCT côté client Supabase : on lit un lot large de transactions
+  // récentes et on déduplique nous-mêmes. Si l'historique du marché devient énorme, une vue
+  // dédiée côté SQL (ex. market_known_items) serait plus propre et plus rapide.
+  async function fetchTradedItemNames(limit = 3000) {
+    const { data, error } = await window.sb
+      .from("market_transactions")
+      .select("item_id, item_name")
+      .order("sold_at", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  function buildItemOptions(tradedRows, activeListings) {
+    const seen = new Map();
+    for (const row of tradedRows) {
+      if (row.item_id && !seen.has(row.item_id)) seen.set(row.item_id, row.item_name ?? row.item_id);
+    }
+    // Les items tout juste mis en vente mais jamais encore vendus doivent aussi apparaître.
+    for (const l of activeListings) {
+      if (l.item_id && !seen.has(l.item_id)) seen.set(l.item_id, l.item_name ?? l.item_id);
+    }
+    return [...seen.entries()]
+      .map(([item_id, item_name]) => ({ item_id, item_name }))
+      .sort((a, b) => (a.item_name ?? a.item_id).localeCompare(b.item_name ?? b.item_id, "fr"));
+  }
+
   async function fetchDailyPrices(itemId, currency, sinceIso) {
     if (!itemId) return [];
     let q = window.sb
@@ -191,6 +229,42 @@ window.PageMarket = (() => {
       </div>`;
   }
 
+  // Filtre + tri de la boutique, appliqués côté client sur allActiveListings.
+  function filteredShopListings() {
+    let rows = allActiveListings;
+    if (shopCurrency !== "ALL") rows = rows.filter((l) => l.currency === shopCurrency);
+    const q = shopQuery.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter((l) =>
+        (l.item_name ?? l.item_id ?? "").toLowerCase().includes(q) || (l.seller_name ?? "").toLowerCase().includes(q)
+      );
+    }
+    rows = [...rows];
+    if (shopSort === "price_asc") rows.sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
+    else if (shopSort === "price_desc") rows.sort((a, b) => (b.price ?? 0) - (a.price ?? 0));
+    else if (shopSort === "name_asc") rows.sort((a, b) => (a.item_name ?? a.item_id ?? "").localeCompare(b.item_name ?? b.item_id ?? "", "fr"));
+    else rows.sort((a, b) => new Date(b.listed_at) - new Date(a.listed_at));
+    return rows;
+  }
+
+  function shopToolbarHTML() {
+    const currencyChips = [{ key: "ALL", label: "Toutes" }, ...CURRENCIES].map((c) => `
+      <button data-shop-currency="${c.key}" class="chip-btn !px-2 ${c.key === shopCurrency ? "active" : ""}" title="${window.esc(c.label)}" aria-label="${window.esc(c.label)}">
+        ${c.key === "ALL" ? "Toutes" : currencyIconHTML(c.key, 18)}
+      </button>`).join("");
+    const sortOpts = SHOP_SORTS.map((s) => `<option value="${s.key}" ${s.key === shopSort ? "selected" : ""}>${s.label}</option>`).join("");
+    return `
+      <div class="flex flex-wrap items-center gap-3 mb-4">
+        <div class="relative flex-1 min-w-[180px] max-w-xs">
+          <span class="absolute left-3 top-1/2 -translate-y-1/2 text-dim pointer-events-none">${window.icon("search", 15)}</span>
+          <input id="market-shop-search" type="text" placeholder="Chercher un item ou un vendeur…" autocomplete="off" aria-label="Chercher dans la boutique"
+            value="${window.esc(shopQuery)}" class="field !pl-9" />
+        </div>
+        <div class="flex flex-wrap gap-1.5" id="market-shop-currency-nav">${currencyChips}</div>
+        <select id="market-shop-sort" class="field" aria-label="Trier la boutique">${sortOpts}</select>
+      </div>`;
+  }
+
   function shopPaginationHTML(page, totalPages) {
     if (totalPages <= 1) return "";
     return `
@@ -204,13 +278,22 @@ window.PageMarket = (() => {
   function renderShopPage() {
     const grid = document.getElementById("market-shop-grid");
     const pag = document.getElementById("market-shop-pagination");
+    const countEl = document.getElementById("market-shop-count");
     if (!grid) return;
-    const totalPages = Math.max(1, Math.ceil(allActiveListings.length / SHOP_PAGE_SIZE));
+    const filtered = filteredShopListings();
+    const totalPages = Math.max(1, Math.ceil(filtered.length / SHOP_PAGE_SIZE));
     shopPage = Math.min(Math.max(1, shopPage), totalPages);
     const start = (shopPage - 1) * SHOP_PAGE_SIZE;
-    const pageItems = allActiveListings.slice(start, start + SHOP_PAGE_SIZE);
-    grid.innerHTML = pageItems.map(shopCardHTML).join("") || `<div class="col-span-full">${window.ui.empty("Aucune annonce active pour le moment.", "store")}</div>`;
+    const pageItems = filtered.slice(start, start + SHOP_PAGE_SIZE);
+    const isFiltered = shopQuery.trim() !== "" || shopCurrency !== "ALL";
+    grid.innerHTML = pageItems.map(shopCardHTML).join("") ||
+      `<div class="col-span-full">${window.ui.empty(isFiltered ? "Aucune annonce ne correspond à ce filtre." : "Aucune annonce active pour le moment.", "store")}</div>`;
     if (pag) pag.innerHTML = shopPaginationHTML(shopPage, totalPages);
+    if (countEl) {
+      countEl.textContent = isFiltered
+        ? `${window.fmt.int(filtered.length)} annonce(s) sur ${window.fmt.int(allActiveListings.length)} au total, ${SHOP_PAGE_SIZE} par page.`
+        : `${window.fmt.int(allActiveListings.length)} annonce(s) actuellement en vente, ${SHOP_PAGE_SIZE} par page.`;
+    }
   }
 
   function transactionRowHTML(t) {
@@ -274,11 +357,31 @@ window.PageMarket = (() => {
     });
   }
 
-  function itemSelectorHTML() {
-    const opts = itemOptions.map((it) =>
-      `<option value="${window.esc(it.item_id)}" ${it.item_id === selectedItemId ? "selected" : ""}>${window.esc(it.item_name ?? it.item_id)}</option>`
-    ).join("");
-    return `<select id="market-item-select" class="field" aria-label="Item">${opts}</select>`;
+  function selectedItemLabel() {
+    const it = itemOptions.find((x) => x.item_id === selectedItemId);
+    return it ? (it.item_name ?? it.item_id) : "";
+  }
+
+  function itemSearchHTML() {
+    return `
+      <div class="relative w-full sm:w-64">
+        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-dim pointer-events-none">${window.icon("search", 15)}</span>
+        <input id="market-item-search" type="text" placeholder="Chercher un item…" autocomplete="off" aria-label="Choisir un item pour le graphique de cours"
+          class="field !pl-9" value="${window.esc(selectedItemLabel())}" />
+        <div id="market-item-suggestions" class="hidden absolute z-10 left-0 right-0 mt-1 card max-h-64 overflow-y-auto shadow-xl shadow-black/50"></div>
+      </div>`;
+  }
+
+  function itemSuggestionsHTML(query) {
+    const q = query.trim().toLowerCase();
+    const matches = (q
+      ? itemOptions.filter((it) => (it.item_name ?? it.item_id).toLowerCase().includes(q) || it.item_id.toLowerCase().includes(q))
+      : itemOptions
+    ).slice(0, 40);
+    if (!matches.length) return `<div class="px-3 py-2.5 text-sm text-muted">Aucun item trouvé.</div>`;
+    return matches
+      .map((it) => `<button type="button" data-pick-item="${window.esc(it.item_id)}" class="w-full text-left px-3 py-2 text-sm hover:bg-surface2 truncate">${window.esc(it.item_name ?? it.item_id)}</button>`)
+      .join("");
   }
 
   function currencySelectorHTML() {
@@ -304,17 +407,22 @@ window.PageMarket = (() => {
     destroyCharts();
 
     try {
-      const [activeListings, recentTx, txCount, topSellers, topBuyers, topItems] = await Promise.all([
+      const [activeListings, recentTx, txCount, topSellers, topBuyers, topItems, tradedItemNames] = await Promise.all([
         fetchActiveListings(),
         fetchRecentTransactions(20),
         fetchTransactionCount(),
         fetchTopSellers(),
         fetchTopBuyers(),
         fetchTopItems(),
+        fetchTradedItemNames(),
       ]);
 
-      itemOptions = topItems.map((i) => ({ item_id: i.item_id, item_name: i.item_name }));
-      if (!selectedItemId && itemOptions.length) selectedItemId = itemOptions[0].item_id;
+      itemOptions = buildItemOptions(tradedItemNames, activeListings);
+      // Par défaut, on pointe sur l'item le plus échangé (plus parlant qu'un choix alphabétique) ;
+      // si l'item déjà sélectionné n'existe plus dans la liste, on retombe dessus aussi.
+      if (!selectedItemId || !itemOptions.some((it) => it.item_id === selectedItemId)) {
+        selectedItemId = topItems[0]?.item_id ?? itemOptions[0]?.item_id ?? null;
+      }
 
       allActiveListings = activeListings;
       shopPage = 1;
@@ -339,7 +447,7 @@ window.PageMarket = (() => {
             action: window.ui.segmented(PRICE_PERIODS, pricePeriod, "price-period", "market-price-period-nav"),
             body: `
               <div class="flex flex-wrap items-center gap-3 mb-4">
-                ${itemOptions.length ? itemSelectorHTML() : `<p class="text-sm text-muted">Pas encore de ventes à afficher.</p>`}
+                ${itemOptions.length ? itemSearchHTML() : `<p class="text-sm text-muted">Pas encore de ventes à afficher.</p>`}
                 <div class="flex flex-wrap gap-1.5" id="market-currency-nav">${currencySelectorHTML()}</div>
               </div>
               <div style="height:290px" id="chart-price-wrap"><canvas id="chart-price"></canvas></div>`,
@@ -367,8 +475,10 @@ window.PageMarket = (() => {
         ${window.ui.panel({
           id: "sec-boutique",
           title: "Boutique",
-          desc: `${window.fmt.int(activeListings.length)} annonce(s) actuellement en vente, ${SHOP_PAGE_SIZE} par page.`,
-          body: `<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3" id="market-shop-grid"></div><div id="market-shop-pagination"></div>`,
+          desc: `<span id="market-shop-count">${window.fmt.int(activeListings.length)} annonce(s) actuellement en vente, ${SHOP_PAGE_SIZE} par page.</span>`,
+          body: `
+            ${shopToolbarHTML()}
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3" id="market-shop-grid"></div><div id="market-shop-pagination"></div>`,
         })}
       `;
 
@@ -383,10 +493,54 @@ window.PageMarket = (() => {
 
       buildPriceChart(await fetchDailyPrices(selectedItemId, selectedCurrency, priceSinceIso()));
 
-      document.getElementById("market-item-select")?.addEventListener("change", (e) => {
-        selectedItemId = e.target.value;
+      // Recherche d'item pour le graphique de cours (autocomplétion, comme la recherche joueur).
+      const itemSearchInput = document.getElementById("market-item-search");
+      const itemSuggBox = document.getElementById("market-item-suggestions");
+      itemSearchInput?.addEventListener("input", () => {
+        itemSuggBox.innerHTML = itemSuggestionsHTML(itemSearchInput.value);
+        itemSuggBox.classList.remove("hidden");
+      });
+      itemSearchInput?.addEventListener("focus", () => {
+        itemSuggBox.innerHTML = itemSuggestionsHTML(itemSearchInput.value);
+        itemSuggBox.classList.remove("hidden");
+      });
+      itemSearchInput?.addEventListener("blur", () => {
+        // Laisse le temps au clic sur une suggestion de se déclencher avant de fermer/réinitialiser.
+        setTimeout(() => {
+          itemSuggBox.classList.add("hidden");
+          itemSearchInput.value = selectedItemLabel();
+        }, 150);
+      });
+      itemSuggBox?.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-pick-item]");
+        if (!btn) return;
+        selectedItemId = btn.dataset.pickItem;
+        itemSearchInput.value = selectedItemLabel();
+        itemSuggBox.classList.add("hidden");
         reloadPriceChart();
       });
+
+      // Recherche + tri de la boutique.
+      document.getElementById("market-shop-search")?.addEventListener("input", (e) => {
+        shopQuery = e.target.value;
+        shopPage = 1;
+        renderShopPage();
+      });
+      document.getElementById("market-shop-currency-nav")?.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-shop-currency]");
+        if (!btn) return;
+        shopCurrency = btn.dataset.shopCurrency;
+        shopPage = 1;
+        document.querySelectorAll("#market-shop-currency-nav .chip-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        renderShopPage();
+      });
+      document.getElementById("market-shop-sort")?.addEventListener("change", (e) => {
+        shopSort = e.target.value;
+        shopPage = 1;
+        renderShopPage();
+      });
+
       document.getElementById("market-currency-nav")?.addEventListener("click", (e) => {
         const btn = e.target.closest("button[data-currency]");
         if (!btn) return;

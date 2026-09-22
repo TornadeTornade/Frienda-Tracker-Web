@@ -227,7 +227,7 @@ window.PageServerStats = (() => {
   // Exclut aussi distance_meters : déjà mis en avant comme "fun fact" dédié
   // juste sous le hero, pas la peine de le répéter une 2e fois en tuile.
   function recordCategories(players) {
-    return window.STAT_CATEGORIES.filter(
+    return window.visibleStats("serverStats").filter(
       (c) => !["distance_meters"].includes(c.key)
     ).map((c) => ({ cat: c, total: players.reduce((sum, p) => sum + (p[c.key] ?? 0), 0) }));
   }
@@ -238,7 +238,7 @@ window.PageServerStats = (() => {
   // radar (l'axe) et la légende (le détail exact, pour ne pas laisser le
   // "100%" de chaque axe sans explication).
   function serverProfileRows(players) {
-    return PROFILE_KEYS.map((key) => {
+    return window.filterVisibleKeys(PROFILE_KEYS, "serverStats").map((key) => {
       const cat = window.statByKey(key);
       const values = players.map((p) => p[key] ?? 0);
       const max = Math.max(0, ...values);
