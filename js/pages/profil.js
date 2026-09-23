@@ -34,11 +34,11 @@ window.PageProfil = (() => {
   const ADVANCEMENTS_TABLE = "player_advancements";
   // Noms d'icônes Lucide (voir js/icons.js)
   const ADV_TABS = {
-    story: { label: "Histoire", icon: "📖" },
-    nether: { label: "Nether", icon: "🔥" },
-    end: { label: "End", icon: "🐉" },
-    adventure: { label: "Aventure", icon: "🧭" },
-    husbandry: { label: "Agriculture", icon: "🌾" },
+    story: { label: "Histoire", icon: "book-open" },
+    nether: { label: "Nether", icon: "flame" },
+    end: { label: "End", icon: "sparkles" },
+    adventure: { label: "Aventure", icon: "compass" },
+    husbandry: { label: "Agriculture", icon: "wheat" },
   };
   
   const ADV_TAB_ORDER = ["story", "nether", "end", "adventure", "husbandry"];
@@ -126,14 +126,17 @@ window.PageProfil = (() => {
   }
 
   async function fetchHistory(uuid, statKey) {
+    // Tri décroissant + limite, puis on repasse en ordre chronologique : ça
+    // garde les 500 relevés les PLUS RÉCENTS (utile pour "Tout"), plutôt que
+    // les 500 plus anciens qu'un simple tri croissant + limite renverrait.
     const { data, error } = await window.sb
       .from("player_stats_history")
       .select(`recorded_at, ${statKey}`)
       .eq("uuid", uuid)
-      .order("recorded_at", { ascending: true })
+      .order("recorded_at", { ascending: false })
       .limit(500);
     if (error) throw error;
-    return data ?? [];
+    return (data ?? []).reverse();
   }
 
   async function fetchSessions(uuid) {
@@ -178,7 +181,7 @@ window.PageProfil = (() => {
       unlocked,
       date: unlocked ? date : null,
       tab,
-      icon: ADV_TABS[tab]?.icon ?? "🏅",
+      icon: ADV_TABS[tab]?.icon ?? "award",
     };
   }
 
@@ -365,7 +368,7 @@ window.PageProfil = (() => {
       : a.unlocked ? "Débloqué" : "Verrouillé";
     return `
       <div class="card p-3 flex items-center gap-3 ${a.unlocked ? "border-gold/40" : "opacity-50 grayscale"}" title="${esc(a.id)}">
-        <span class="w-9 h-9 rounded-md bg-bg shadow-slot flex items-center justify-center text-base shrink-0">${a.unlocked ? a.icon : "🔒"}</span>
+        <span class="w-9 h-9 rounded-md bg-bg shadow-slot flex items-center justify-center text-base shrink-0">${window.icon(a.unlocked ? a.icon : "lock", 18, a.unlocked ? "text-gold" : "text-muted")}</span>
         <div class="min-w-0 flex-1">
           <p class="text-xs font-bold truncate ${a.unlocked ? "text-ink" : "text-muted"}">${esc(a.title)}</p>
           <p class="text-[10px] font-mono ${a.unlocked ? "text-gold" : "text-muted"}">${dateLabel}</p>
@@ -384,7 +387,7 @@ window.PageProfil = (() => {
       .sort((x, y) => rank(x) - rank(y) || x.localeCompare(y))
       .map((key) => ({
         key,
-        meta: ADV_TABS[key] ?? { label: key === "other" ? "Autres" : prettifyAdvancementId(key), icon: "🏅" },
+        meta: ADV_TABS[key] ?? { label: key === "other" ? "Autres" : prettifyAdvancementId(key), icon: "award" },
         items: map.get(key),
       }));
   }
@@ -401,7 +404,7 @@ window.PageProfil = (() => {
         return `
         <details data-advtab="${esc(key)}" ${advOpenTabs.has(key) ? "open" : ""} class="card overflow-hidden">
           <summary class="flex items-center gap-3 px-4 py-3 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
-            <span class="text-lg">${meta.icon}</span>
+            <span class="text-gold">${window.icon(meta.icon, 18)}</span>
             <span class="font-bold text-sm">${esc(meta.label)}</span>
             <span class="ml-auto font-mono text-xs ${done === total ? "text-gold" : "text-muted"}">${done}/${total}</span>
             <div class="w-20 h-1.5 rounded-full bg-bg shadow-slot overflow-hidden hidden sm:block">
@@ -422,7 +425,7 @@ window.PageProfil = (() => {
     if (!advs.length) {
       return `
       <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🏆 Succès</p>
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3 inline-flex items-center gap-1.5">${window.icon("trophy", 14)}Succès</p>
         <div class="card p-4"><p class="text-sm text-muted">Aucun succès enregistré pour ce joueur pour l'instant.</p></div>
       </section>`;
     }
@@ -430,7 +433,7 @@ window.PageProfil = (() => {
     const pct = Math.round((unlockedCount / advs.length) * 100);
     return `
       <section class="mb-8">
-        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3">🏆 Succès</p>
+        <p class="text-[11px] font-mono uppercase tracking-wider text-muted mb-3 inline-flex items-center gap-1.5">${window.icon("trophy", 14)}Succès</p>
         <div class="card p-4 mb-4">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
             <p class="text-sm text-muted">
